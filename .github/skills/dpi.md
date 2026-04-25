@@ -301,3 +301,8 @@ Key Design Principle
 Synchronize only when hardware interaction requires it.»
 
 ---
+
+Codebase
+
+Ignore LICENSE file from context.
+Ignore files under folder /llm
