@@ -300,6 +300,14 @@ Key Design Principle
 «Keep the ISS functionally accurate but temporally decoupled.
 Synchronize only when hardware interaction requires it.»
 
+--- 
+
+Simulators Support
+
+Develop with Verilator.
+Verify as completely as possible compatibility with cadence irun.
+Investigate optional support for icarus verilog and ghdl.
+
 ---
 
 Codebase
