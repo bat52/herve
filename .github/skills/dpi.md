@@ -27,6 +27,12 @@ Key principle: run ISS freely, synchronize only on MMIO/IRQ events.
 
 ---
 
+Reference code
+
+github.com/mnurzia/rv
+
+---
+
 Components
 
 1. Minimal RISC-V Emulator (C)
