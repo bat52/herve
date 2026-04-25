@@ -30,6 +30,7 @@ Key principle: run ISS freely, synchronize only on MMIO/IRQ events.
 Reference code
 
 github.com/mnurzia/rv
+github.com/cnlohr/mini-rv32ima
 
 ---
 
