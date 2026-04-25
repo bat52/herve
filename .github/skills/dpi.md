@@ -21,7 +21,7 @@ MMIO hooks (DPI-C)
     ↓
 SystemVerilog bridge
     ↓
-RTL DUT (AXI/AHB/etc.)
+RTL DUT (AHB/AXI/etc.)
 
 Key principle: run ISS freely, synchronize only on MMIO/IRQ events.
 
@@ -82,11 +82,11 @@ if (is_mmio(addr)) {
 In SystemVerilog:
 
 function int dpi_mmio_read(int addr);
-    return axi_read(addr);
+    return ahb_read(addr);
 endfunction
 
 function void dpi_mmio_write(int addr, int data);
-    axi_write(addr, data);
+    ahb_write(addr, data);
 endfunction
 
 ---
@@ -95,8 +95,8 @@ endfunction
 
 - Use a Verilator C++ testbench or SystemVerilog harness.
 - Wrap DUT with a bus functional model (BFM) exposing:
-  - "axi_read(addr)"
-  - "axi_write(addr, data)"
+  - "ahb_read(addr)"
+  - "ahb_write(addr, data)"
 - Ensure proper ready/valid handshake and clocking.
 - Avoid combinational loops between DPI and RTL.
 
@@ -222,7 +222,7 @@ Phase 5 — ISA Support Comparison
 
 Phase 6 — RTL Coupling, IRQ, DMA
 
-- [ ] Implement AXI-lite BFM.
+- [ ] Implement AHB BFM.
 - [ ] Connect MMIO to DUT.
 - [ ] Validate read/write transactions.
 - [ ] Add IRQ injection path.
