@@ -148,6 +148,332 @@ static void write_reg(uint32_t reg, uint32_t value) {
     }
 }
 
+/*
+ * Compressed instruction (RV32C) decoder.
+ *
+ * Expands 16-bit compressed instructions into their equivalent RV32I
+ * operations. This approach reuses the existing memory access and
+ * register write infrastructure without needing a separate decoder.
+ *
+ * Returns true if the instruction was successfully executed,
+ * false if it was an illegal instruction or EBREAK.
+ */
+static bool execute_compressed(uint16_t insn) {
+    /* Decode compressed register (x8-x15) from 3-bit field */
+    uint32_t rd_c = ((insn >> 2) & 0x7u) + 8;
+    uint32_t rs1_c = ((insn >> 7) & 0x7u) + 8;
+    uint32_t rs2_c = ((insn >> 2) & 0x7u) + 8;
+
+    uint32_t funct3 = (insn >> 13) & 0x7u;
+    uint32_t funct2 = (insn >> 10) & 0x3u;
+    uint32_t funct4 = (insn >> 12) & 0xfu;
+    uint32_t rd = (insn >> 7) & 0x1fu;
+    uint32_t rs1 = (insn >> 7) & 0x1fu;
+    uint32_t rs2 = (insn >> 2) & 0x1fu;
+
+    switch (insn & 0x3u) {
+        /*********************************************************************
+         * Quadrant 0: insn[1:0] = 0b00
+         ********************************************************************/
+        case 0x0: {
+            switch (funct3) {
+                case 0x0: // C.ADDI4SPN (CIW)
+                {
+                    // nzuimm[9:0] encoded as:
+                    // insn[12]=nzuimm[5], insn[11]=nzuimm[4], insn[10]=nzuimm[9],
+                    // insn[9]=nzuimm[8],  insn[8]=nzuimm[7],  insn[7]=nzuimm[6],
+                    // insn[6]=nzuimm[2],  insn[5]=nzuimm[3]
+                    uint32_t nzuimm = ((insn >> 12) & 0x1u) << 5 |  // nzuimm[5]
+                                      ((insn >> 11) & 0x1u) << 4 |  // nzuimm[4]
+                                      ((insn >> 10) & 0x1u) << 9 |  // nzuimm[9]
+                                      ((insn >> 9)  & 0x1u) << 8 |  // nzuimm[8]
+                                      ((insn >> 8)  & 0x1u) << 7 |  // nzuimm[7]
+                                      ((insn >> 7)  & 0x1u) << 6 |  // nzuimm[6]
+                                      ((insn >> 6)  & 0x1u) << 2 |  // nzuimm[2]
+                                      ((insn >> 5)  & 0x1u) << 3;   // nzuimm[3]
+                    if (nzuimm == 0) return false; // illegal instruction
+                    write_reg(rd_c, regs[2] + nzuimm); // sp = x2
+                    return true;
+                }
+                case 0x1: // C.FLD (RV64/DFP) — not supported
+                    return false;
+                case 0x2: // C.LW (CL)
+                {
+                    uint32_t offset = ((insn >> 10) & 0x7u) << 3 |
+                                      ((insn >> 5) & 0x3u) << 1;
+                    uint32_t addr = regs[rs1_c] + offset;
+                    write_reg(rd_c, read_u32(addr));
+                    return true;
+                }
+                case 0x3: // C.LD (RV64) — not supported
+                    return false;
+                case 0x4: // reserved / C.FLW (RV32FC) — not supported
+                    return false;
+                case 0x5: // C.FSD (RV64/DFP) — not supported
+                    return false;
+                case 0x6: // C.SW (CS)
+                {
+                    uint32_t offset = ((insn >> 10) & 0x7u) << 3 |
+                                      ((insn >> 5) & 0x3u) << 1;
+                    uint32_t addr = regs[rs1_c] + offset;
+                    write_u32(addr, regs[rs2_c]);
+                    return true;
+                }
+                case 0x7: // C.SD (RV64) — not supported
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        /*********************************************************************
+         * Quadrant 1: insn[1:0] = 0b01
+         ********************************************************************/
+        case 0x1: {
+            switch (funct3) {
+                case 0x0: // C.ADDI (CI)
+                {
+                    uint32_t imm = ((insn >> 12) & 0x1u) << 5 |
+                                   ((insn >> 2) & 0x1fu);
+                    imm = sign_extend(imm, 6);
+                    if (rd == 0) return true; // C.NOP
+                    write_reg(rd, regs[rd] + imm);
+                    return true;
+                }
+                case 0x1: // C.JAL (RV32 only) / C.ADDIW (RV64)
+                {
+                    // C.JAL: rd = x1 (ra), jump with offset
+                    uint32_t offset = ((insn >> 3) & 0x7u) << 1 |
+                                      ((insn >> 11) & 0x1u) << 4 |
+                                      ((insn >> 2) & 0x1u) << 5 |
+                                      ((insn >> 7) & 0x1u) << 6 |
+                                      ((insn >> 6) & 0x1u) << 7 |
+                                      ((insn >> 9) & 0x3u) << 8 |
+                                      ((insn >> 8) & 0x1u) << 10 |
+                                      ((insn >> 12) & 0x1u) << 11;
+                    offset = sign_extend(offset, 12);
+                    write_reg(1, pc + 2); // ra = return address
+                    pc = pc + offset;
+                    return true;
+                }
+                case 0x2: // C.LI (CI)
+                {
+                    uint32_t imm = ((insn >> 12) & 0x1u) << 5 |
+                                   ((insn >> 2) & 0x1fu);
+                    imm = sign_extend(imm, 6);
+                    write_reg(rd, imm);
+                    return true;
+                }
+                case 0x3: // C.LUI / C.ADDI16SP (CI)
+                {
+                    if (rd == 2) { // C.ADDI16SP
+                        // imm[9:0] encoded as:
+                        // insn[12]=imm[5], insn[6]=imm[7], insn[5]=imm[6],
+                        // insn[4]=imm[8],  insn[3]=imm[9], insn[2]=imm[4]
+                        uint32_t imm = ((insn >> 12) & 0x1u) << 5 |  // imm[5]
+                                       ((insn >> 6)  & 0x1u) << 7 |  // imm[7]
+                                       ((insn >> 5)  & 0x1u) << 6 |  // imm[6]
+                                       ((insn >> 4)  & 0x1u) << 8 |  // imm[8]
+                                       ((insn >> 3)  & 0x1u) << 9 |  // imm[9]
+                                       ((insn >> 2)  & 0x1u) << 4;   // imm[4]
+                        imm = sign_extend(imm, 10);
+                        write_reg(2, regs[2] + imm);
+                        return true;
+                    }
+                    if (rd == 0) return true; // hint
+                    uint32_t imm = ((insn >> 12) & 0x1u) << 17 |
+                                   ((insn >> 2) & 0x1fu) << 12;
+                    if (imm == 0) return false; // illegal
+                    write_reg(rd, imm);
+                    return true;
+                }
+                case 0x4: // reserved (funct3=100 in Q1)
+                {
+                    // C.SRLI / C.SRAI / C.ANDI / C.SUB / C.XOR / C.OR / C.AND
+                    uint32_t funct2_high = (insn >> 10) & 0x3u;
+                    uint32_t funct2_low = (insn >> 5) & 0x3u; // bits [6:5] for CA-type
+
+                    if (funct2_high == 0x0) {
+                        // C.SRLI (CB) — rd'/rs1' in bits [9:7]
+                        uint32_t shamt = ((insn >> 12) & 0x1u) << 5 |
+                                         ((insn >> 2) & 0x1fu);
+                        if (shamt == 0) return true; // C.NOP hint
+                        write_reg(rs1_c, regs[rs1_c] >> shamt);
+                        return true;
+                    }
+                    if (funct2_high == 0x1) {
+                        // C.SRAI (CB) — rd'/rs1' in bits [9:7]
+                        uint32_t shamt = ((insn >> 12) & 0x1u) << 5 |
+                                         ((insn >> 2) & 0x1fu);
+                        if (shamt == 0) return true; // C.NOP hint
+                        write_reg(rs1_c, (uint32_t)((int32_t)regs[rs1_c] >> shamt));
+                        return true;
+                    }
+                    if (funct2_high == 0x2) {
+                        // C.ANDI (CB) — rd'/rs1' in bits [9:7]
+                        uint32_t imm = ((insn >> 12) & 0x1u) << 5 |
+                                       ((insn >> 2) & 0x1fu);
+                        imm = sign_extend(imm, 6);
+                        write_reg(rs1_c, regs[rs1_c] & imm);
+                        return true;
+                    }
+                    if (funct2_high == 0x3) {
+                        // funct1 is bit [12] for CA-type
+                        uint32_t funct1_ca = (insn >> 12) & 0x1u;
+                        if (funct1_ca == 0) {
+                            // C.SUB / C.XOR / C.OR / C.AND (CA)
+                            switch (funct2_low) {
+                                case 0x0: // C.SUB
+                                    write_reg(rd_c, regs[rd_c] - regs[rs2_c]);
+                                    return true;
+                                case 0x1: // C.XOR
+                                    write_reg(rd_c, regs[rd_c] ^ regs[rs2_c]);
+                                    return true;
+                                case 0x2: // C.OR
+                                    write_reg(rd_c, regs[rd_c] | regs[rs2_c]);
+                                    return true;
+                                case 0x3: // C.AND
+                                    write_reg(rd_c, regs[rd_c] & regs[rs2_c]);
+                                    return true;
+                            }
+                        } else {
+                            // C.SUBW / C.ADDW (RV64) — not supported
+                            return false;
+                        }
+                    }
+                    return false;
+                }
+                case 0x5: // C.J (CJ)
+                {
+                    uint32_t offset = ((insn >> 3) & 0x7u) << 1 |
+                                      ((insn >> 11) & 0x1u) << 4 |
+                                      ((insn >> 2) & 0x1u) << 5 |
+                                      ((insn >> 7) & 0x1u) << 6 |
+                                      ((insn >> 6) & 0x1u) << 7 |
+                                      ((insn >> 9) & 0x3u) << 8 |
+                                      ((insn >> 8) & 0x1u) << 10 |
+                                      ((insn >> 12) & 0x1u) << 11;
+                    offset = sign_extend(offset, 12);
+                    pc = pc + offset;
+                    return true;
+                }
+                case 0x6: // C.BEQZ (CB)
+                {
+                    uint32_t offset = ((insn >> 3) & 0x3u) << 1 |
+                                      ((insn >> 10) & 0x3u) << 3 |
+                                      ((insn >> 2) & 0x1u) << 5 |
+                                      ((insn >> 5) & 0x1u) << 6 |
+                                      ((insn >> 12) & 0x1u) << 8;
+                    offset = sign_extend(offset, 9);
+                    if (regs[rs1_c] == 0) {
+                        pc = pc + offset;
+                    }
+                    return true;
+                }
+                case 0x7: // C.BNEZ (CB)
+                {
+                    uint32_t offset = ((insn >> 3) & 0x3u) << 1 |
+                                      ((insn >> 10) & 0x3u) << 3 |
+                                      ((insn >> 2) & 0x1u) << 5 |
+                                      ((insn >> 5) & 0x1u) << 6 |
+                                      ((insn >> 12) & 0x1u) << 8;
+                    offset = sign_extend(offset, 9);
+                    if (regs[rs1_c] != 0) {
+                        pc = pc + offset;
+                    }
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        }
+
+        /*********************************************************************
+         * Quadrant 2: insn[1:0] = 0b10
+         ********************************************************************/
+        case 0x2: {
+            switch (funct3) {
+                case 0x0: // C.SLLI (CI)
+                {
+                    uint32_t shamt = ((insn >> 12) & 0x1u) << 5 |
+                                     ((insn >> 2) & 0x1fu);
+                    if (shamt == 0) return true; // C.NOP hint
+                    write_reg(rd, regs[rd] << shamt);
+                    return true;
+                }
+                case 0x1: // C.FLDSP (RV64/DFP) — not supported
+                    return false;
+                case 0x2: // C.LWSP (CI)
+                {
+                    // offset = {insn[6:2], 2'b00} — 8-bit unsigned, word-aligned
+                    uint32_t offset = ((insn >> 2) & 0x1fu) << 2;
+                    uint32_t addr = regs[2] + offset; // sp = x2
+                    write_reg(rd, read_u32(addr));
+                    return true;
+                }
+                case 0x3: // C.LDSP (RV64) — not supported
+                    return false;
+                case 0x4: // C.MV / C.ADD / C.JR / C.JALR / C.EBREAK
+                {
+                    // funct4 = (insn >> 12) & 0xf
+                    // bits [15:12] = 1000 → C.MV (rs2 != 0) or C.JR (rs2 == 0)
+                    // bits [15:12] = 1001 → C.ADD (rs2 != 0) or C.JALR (rs2 == 0) or C.EBREAK (both 0)
+                    uint32_t funct4_val = (insn >> 12) & 0xfu;
+                    if (funct4_val == 0x8) {
+                        // C.MV or C.JR
+                        if (rs2 == 0) {
+                            // C.JR rs1 (rs1 != 0)
+                            if (rs1 == 0) return false; // illegal
+                            pc = regs[rs1];
+                            return true;
+                        }
+                        // C.MV rd, rs2
+                        write_reg(rd, regs[rs2]);
+                        return true;
+                    }
+                    if (funct4_val == 0x9) {
+                        if (rs2 == 0 && rs1 == 0) {
+                            // C.EBREAK
+                            return false;
+                        }
+                        if (rs2 == 0) {
+                            // C.JALR rs1
+                            if (rs1 == 0) return false; // illegal
+                            write_reg(1, pc + 2); // ra = return address
+                            pc = regs[rs1];
+                            return true;
+                        }
+                        // C.ADD rd, rs2
+                        write_reg(rd, regs[rd] + regs[rs2]);
+                        return true;
+                    }
+                    return false;
+                }
+                case 0x5: // C.FSDSP (RV64/DFP) — not supported
+                    return false;
+                case 0x6: // C.SWSP (CSS)
+                {
+                    // offset[7:6] = insn[11:10], offset[5:4] = insn[6:5]
+                    // rs2 = insn[9:7] (different from the default rs2 which is bits [6:2])
+                    uint32_t offset = ((insn >> 10) & 0x3u) << 6 |
+                                      ((insn >> 5) & 0x3u) << 4;
+                    uint32_t rs2_swsp = (insn >> 7) & 0x1fu;
+                    uint32_t addr = regs[2] + offset; // sp = x2
+                    write_u32(addr, regs[rs2_swsp]);
+                    return true;
+                }
+                case 0x7: // C.SDSP (RV64) — not supported
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        default:
+            return false;
+    }
+}
+
 static bool execute_instruction(uint32_t insn) {
     uint32_t opcode = insn & 0x7fu;
     uint32_t rd = (insn >> 7) & 0x1fu;
@@ -575,8 +901,18 @@ int rv_step(int max_instructions) {
         }
 
         uint32_t insn = read_u32(pc);
-        if (!execute_instruction(insn)) {
-            break;
+        if ((insn & 0x3u) != 0x3u) {
+            /* 16-bit compressed instruction */
+            uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+            if (!execute_compressed(c_insn)) {
+                break;
+            }
+            pc += 2;
+        } else {
+            if (!execute_instruction(insn)) {
+                break;
+            }
+            /* pc is advanced by +4 inside execute_instruction */
         }
         executed += 1;
     }

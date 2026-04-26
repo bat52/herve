@@ -20,7 +20,19 @@ Target: RV32I (Base) + M (Multiply/Divide) + C (Compressed)
 
 ## RV32C Standard Extension
 
-- [ ] TBD — Not yet implemented
+- [x] C.ADDI, C.LI, C.LUI, C.NOP
+- [x] C.ADDI4SPN, C.ADDI16SP
+- [x] C.SLLI, C.SRLI, C.SRAI
+- [x] C.ANDI, C.AND, C.OR, C.XOR, C.SUB
+- [x] C.MV, C.ADD
+- [x] C.J, C.JAL, C.JR, C.JALR
+- [x] C.BEQZ, C.BNEZ
+- [x] C.LW, C.SW, C.LWSP, C.SWSP
+- [x] C.EBREAK
+- [ ] C.FLW, C.FSW (RV32FC — FP not supported)
+- [ ] C.LD, C.SD, C.LDSP, C.SDSP (RV64C — not applicable)
+- [ ] C.FLD, C.FSD, C.FLDSP, C.FSDSP (RV64/DFP — not supported)
+- [ ] C.ADDIW, C.ADDW, C.SUBW (RV64 — not applicable)
 
 ## Zicsr / Privileged
 
@@ -51,7 +63,7 @@ Target: RV32I (Base) + M (Multiply/Divide) + C (Compressed)
 
 | Feature | Status | Impact | Mitigation |
 |---------|--------|--------|------------|
-| C-extension (compressed) | ❌ Not implemented | Firmware compiled with `-march=rv32im` (no C) works; `-march=rv32imc` will fault | Compile firmware with `-march=rv32im` |
+| C-extension (compressed) | ✅ Implemented | All RV32C instructions supported (except FP/RV64 variants) | Compile firmware with `-march=rv32imc` for smaller code size |
 | Floating-point (RV32F/D) | ❌ Not implemented | FP instructions will fault | Compile with `-march=rv32im` (no float) |
 | MMU / virtual memory | ❌ Not implemented | No paging support | Bare-metal only |
 | Physical Memory Protection (PMP) | ❌ Not implemented | No memory protection | Bare-metal only |

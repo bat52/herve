@@ -124,6 +124,13 @@ rv32_dpi_test: sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c
 run_standalone: rv32_dpi_test
 	./rv32_dpi_test
 
+# ---- Standalone C-extension test (no Verilator, no RISC-V toolchain) ----
+rv32_dpi_c_test: sim/iss/rv32_dpi_c_test.cpp sim/iss/rv32_dpi.c
+	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_c_test.cpp sim/iss/rv32_dpi.c
+
+run_c_test: rv32_dpi_c_test
+	./rv32_dpi_c_test
+
 clean:
 	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o rv32_dpi_test
 
