@@ -13,10 +13,15 @@
  * them by directly accessing the Verilator model's signals rather than
  * going through Verilator's DPI export mechanism (which requires scope
  * management that's problematic when called from outside eval context).
+ *
+ * Signal ownership:
+ *   clk       - C++ testbench (this file)
+ *   rstn      - C++ testbench (this file)
+ *   mem_read  - C++ testbench (this file)
+ *   mem_write - firmware via ISS -> dpi_mmio_write() -> SV export
  */
 
 #include "Vtb_top.h"
-#include "Vtb_top___024root.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 #include "rv32_dpi.h"
@@ -25,25 +30,27 @@
 #include <string.h>
 
 static Vtb_top *tb = nullptr;
+static uint64_t sim_time = 0;
+static const uint64_t CLK_HALF_PERIOD = 5000; // 5 ns half-period => 100 MHz clock
 
 // -----------------------------------------------------------------------
 // DPI export implementations (direct model access)
 //
 // Instead of routing through Verilator's DPI export dispatch (which
 // requires proper scope context), we directly read/write the SV signals
-// through the Verilator model's hierarchy.
+// through the Verilator model's port interface.
 // -----------------------------------------------------------------------
 
 extern "C" int dpi_mmio_read(int addr) {
     if (addr == 0x10000000) {
-        return tb->rootp->tb_top__DOT__mem_read;
+        return tb->mem_read;
     }
     return 0;
 }
 
 extern "C" void dpi_mmio_write(int addr, int data) {
     if (addr == 0x10000000) {
-        tb->rootp->tb_top__DOT__mem_write = data;
+        tb->mem_write = data;
     }
 }
 
@@ -78,6 +85,16 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -n <count>   Number of instructions to execute (default: 64)\n");
     fprintf(stderr, "  -h           Show this help\n");
+}
+
+// -----------------------------------------------------------------------
+// Clock tick helper: toggle clk, eval, dump at proper time increments
+// -----------------------------------------------------------------------
+static void tick(VerilatedVcdC *tfp) {
+    tb->clk = !tb->clk;
+    tb->eval();
+    sim_time += CLK_HALF_PERIOD;
+    tfp->dump(sim_time);
 }
 
 // =======================================================================
@@ -123,34 +140,54 @@ int main(int argc, char **argv) {
     printf("RAM[0..7]: 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x\n",
            ram[0], ram[1], ram[2], ram[3], ram[4], ram[5], ram[6], ram[7]);
 
-    // Initialise the RTL (Verilator model)
-    tb->rootp->tb_top__DOT__clk = 0;
-    tb->rootp->tb_top__DOT__rst = 1;
-    tb->rootp->tb_top__DOT__mem_read = 0;
-    tb->rootp->tb_top__DOT__mem_write = 0;
+    // Initialise all signals
+    tb->clk = 0;
+    tb->rstn = 0;  // active-low reset asserted
+    tb->mem_read = 0;
+    tb->mem_write = 0;
 
-    // Run reset for 2 clock edges
-    for (int i = 0; i < 2; ++i) {
-        tb->rootp->tb_top__DOT__clk = !tb->rootp->tb_top__DOT__clk;
-        tb->eval();
+    printf("Starting simulation...\n");
+
+    // ---- Reset phase: hold rstn low for 2 full clock cycles ----
+    // Dump initial state at time 0
+    tfp->dump(sim_time);
+    for (int i = 0; i < 4; ++i) {
+        tick(tfp);
     }
-    tb->rootp->tb_top__DOT__rst = 0;
 
+    // De-assert reset
+    tb->rstn = 1;
+
+    // ---- Drive mem_read with known patterns from C++ ----
+    tb->mem_read = 0xA5A5A5A5;
+
+    // Tick a couple edges with this pattern
+    for (int i = 0; i < 2; ++i) {
+        tick(tfp);
+    }
+
+    // Change mem_read pattern
+    tb->mem_read = 0x5A5A5A5A;
+
+    for (int i = 0; i < 2; ++i) {
+        tick(tfp);
+    }
+
+    // Set final mem_read value for firmware execution
+    tb->mem_read = 0xDEADBEEF;
+
+    // ---- Execute firmware ----
     printf("Starting firmware execution...\n");
-
-    // Execute the firmware in the ISS
     int executed = rv_step(max_instructions);
     printf("rv_step: executed %d instructions\n", executed);
 
-    // Tick the RTL clock a few more edges
-    for (int i = 0; i < 20; ++i) {
-        tb->rootp->tb_top__DOT__clk = !tb->rootp->tb_top__DOT__clk;
-        tb->eval();
-        tfp->dump(i);
+    // ---- Tick the RTL clock a few more edges ----
+    for (int i = 0; i < 10; ++i) {
+        tick(tfp);
     }
 
-    // Print results
-    printf("\nRTL MMIO write result = 0x%08x\n", tb->rootp->tb_top__DOT__mem_write);
+    // ---- Print results ----
+    printf("\nRTL MMIO write result = 0x%08x\n", tb->mem_write);
 
     // Tear down
     tfp->close();
