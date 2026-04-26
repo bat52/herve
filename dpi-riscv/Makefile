@@ -31,9 +31,19 @@ FIRMWARE_IRQ_O = firmware_irq.o
 FIRMWARE_IRQ_ELF = firmware_irq.elf
 CPP_IRQ      = sim/harness/rv32_dpi_irq_tb.cpp
 
+# AHB-Lite GPIO testcase
+FIRMWARE_AHB_S = firmware_ahb.S
+FIRMWARE_AHB_BIN = firmware_ahb.bin
+FIRMWARE_AHB_O = firmware_ahb.o
+FIRMWARE_AHB_ELF = firmware_ahb.elf
+CPP_AHB      = sim/harness/rv32_dpi_ahb_tb.cpp
+SV_AHB       = sim/harness/tb_top_ahb.sv
+BUS_SV       = sim/bus/ahb_lite_bfm.sv
+DUT_SV       = sim/dut/ahb_gpio.sv
+
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq firmware firmware_muldiv firmware_irq
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb
 
 all: run
 
@@ -149,7 +159,34 @@ obj_dir/V$(TOP)_irq: $(SV) $(CPP_IRQ) $(C) $(FIRMWARE_IRQ_BIN)
 run_irq: firmware_irq obj_dir/V$(TOP)_irq
 	./obj_dir/V$(TOP)_irq
 
+# ---- AHB firmware ----
+$(FIRMWARE_AHB_O): $(FIRMWARE_AHB_S)
+	$(RISCV_PREFIX)-as -march=rv32im -o $@ $<
+
+$(FIRMWARE_AHB_ELF): $(FIRMWARE_AHB_O)
+	$(RISCV_PREFIX)-ld -m elf32lriscv -Ttext=0x00000000 -o $@ $<
+
+$(FIRMWARE_AHB_BIN): $(FIRMWARE_AHB_ELF)
+	$(RISCV_PREFIX)-objcopy -O binary $< $@
+
+firmware_ahb: $(FIRMWARE_AHB_BIN)
+
+# ---- AHB-Lite GPIO testcase (Verilator) ----
+obj_dir/V$(TOP)_ahb: $(SV_AHB) $(BUS_SV) $(DUT_SV) $(CPP_AHB) $(C) $(FIRMWARE_AHB_BIN)
+	mkdir -p obj_dir
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(VERILATOR) --timing --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
+	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -o V$(TOP)_ahb \
+	  $(SV_AHB) $(BUS_SV) $(DUT_SV) $(CPP_AHB)
+
+
+run_ahb: firmware_ahb obj_dir/V$(TOP)_ahb
+	./obj_dir/V$(TOP)_ahb
+
 # ---- Standalone ISS test (no Verilator, no RISC-V toolchain) ----
+
 rv32_dpi_test: sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c
 	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c
 
@@ -171,5 +208,6 @@ run_irq_standalone: rv32_dpi_irq_test
 	./rv32_dpi_irq_test
 
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o rv32_dpi_test rv32_dpi_irq_test
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test
+
 
