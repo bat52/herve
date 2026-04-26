@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Initialize the emulator.
  * @param firmware Path to the binary firmware file.
@@ -38,5 +42,9 @@ void* rv_get_ram(void);
  * Get current Program Counter.
  */
 uint32_t rv_get_pc(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // RV32_DPI_H

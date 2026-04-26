@@ -56,4 +56,6 @@ dkms.conf
 .aider*
 
 # Generated files
-/dpi-riscv/obj_dir/*
+dpi-riscv/obj_dir/*
+dpi-riscv/firmware.bin
+dpi-riscv/tb_top.vcd
