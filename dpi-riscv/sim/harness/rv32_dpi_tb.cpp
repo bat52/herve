@@ -1,4 +1,5 @@
 #include "Vtb_top.h"
+#include "Vtb_top___024root.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 #include "rv32_dpi.h"
@@ -6,26 +7,6 @@
 #include <stdio.h>
 
 static Vtb_top *tb = nullptr;
-static const uint32_t TARGET_MMIO = 0x10000000u;
-
-extern "C" uint32_t dpi_mmio_read(uint32_t addr) {
-    if (!tb) {
-        return 0;
-    }
-    if (addr == TARGET_MMIO) {
-        return tb->mem_read;
-    }
-    return 0;
-}
-
-extern "C" void dpi_mmio_write(uint32_t addr, uint32_t value) {
-    if (!tb) {
-        return;
-    }
-    if (addr == TARGET_MMIO) {
-        tb->mem_write = value;
-    }
-}
 
 static uint32_t make_addi(unsigned rd, unsigned rs1, int32_t imm) {
     return ((uint32_t)(imm & 0xfff) << 20) | (rs1 << 15) | (0 << 12) | (rd << 7) | 0x13u;
@@ -59,22 +40,22 @@ int main(int argc, char **argv) {
 
     rv_reset(0);
 
-    tb->clk = 0;
-    tb->rst = 1;
-    tb->mem_read = 0;
-    tb->mem_write = 0;
+    tb->rootp->tb_top__DOT__clk = 0;
+    tb->rootp->tb_top__DOT__rst = 1;
+    tb->rootp->tb_top__DOT__mem_read = 0;
+    tb->rootp->tb_top__DOT__mem_write = 0;
     for (int i = 0; i < 2; ++i) {
-        tb->clk = !tb->clk;
+        tb->rootp->tb_top__DOT__clk = !tb->rootp->tb_top__DOT__clk;
         tb->eval();
     }
-    tb->rst = 0;
+    tb->rootp->tb_top__DOT__rst = 0;
 
     int executed = rv_step(4);
     printf("rv_step executed %d instructions\n", executed);
-    printf("RTL MMIO write result = 0x%08x\n", tb->mem_write);
+    printf("RTL MMIO write result = 0x%08x\n", tb->rootp->tb_top__DOT__mem_write);
 
     for (int i = 0; i < 20; ++i) {
-        tb->clk = !tb->clk;
+        tb->rootp->tb_top__DOT__clk = !tb->rootp->tb_top__DOT__clk;
         tb->eval();
         tfp->dump(i);
     }

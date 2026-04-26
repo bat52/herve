@@ -15,8 +15,14 @@ static uint32_t pc = 0;
 static uint32_t irq_mask = 0;
 static bool initialized = false;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern uint32_t dpi_mmio_read(uint32_t addr);
 extern void dpi_mmio_write(uint32_t addr, uint32_t value);
+#ifdef __cplusplus
+}
+#endif
 
 static inline bool is_mmio_address(uint32_t addr) {
     return addr >= MMIO_BASE && addr < MMIO_BASE + MMIO_SIZE;

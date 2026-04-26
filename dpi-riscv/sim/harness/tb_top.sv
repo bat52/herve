@@ -4,8 +4,8 @@ module tb_top;
     reg [31:0] mem_read;
     reg [31:0] mem_write;
 
-    export "DPI-C" function int dpi_mmio_read(int addr);
-    export "DPI-C" function void dpi_mmio_write(int addr, int data);
+    export "DPI-C" function dpi_mmio_read;
+    export "DPI-C" function dpi_mmio_write;
 
     function int dpi_mmio_read(int addr);
         if (addr == 32'h1000_0000) begin
@@ -30,5 +30,4 @@ module tb_top;
         mem_write = 32'h0;
     end
 
-    always #5 clk = ~clk;
 endmodule
