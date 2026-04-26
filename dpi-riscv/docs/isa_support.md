@@ -59,7 +59,25 @@ Target: RV32I (Base) + M (Multiply/Divide) + C (Compressed)
 | Debug/trace support | ❌ Not implemented | No trigger module | Use VCD waveform dump |
 | Exception fidelity | ⚠️ Partial | ECALL/EBREAK halt; no precise exception model | Sufficient for firmware validation |
 
-## Reference Testbench
+## Verification Status
+
+### RV32M Standalone Test
+
+A standalone ISS test (`sim/iss/rv32_dpi_test.cpp`) verifies all 8 M-extension instructions with 16 test cases covering:
+- Basic multiply: MUL, MULH, MULHSU, MULHU
+- Basic divide: DIV, DIVU, REM, REMU
+- Edge cases: division by zero, remainder by zero, INT32_MIN / -1 overflow
+- Large operand multiplication: 0x10000001^2 (tests both low and high halves)
+
+**Status:** ✅ All 16/16 tests pass (verified via `make run_standalone`)
+
+### Verilator-based Test
+
+A Verilator test harness (`sim/harness/rv32_dpi_muldiv_tb.cpp`) provides the same test coverage using the full RTL simulation stack.
+
+**Status:** ⚠️ Known Verilator DPI convergence issue — the DPI export calls from C code during `rv_step()` trigger "Active region did not converge" errors. The standalone test is the primary verification method.
+
+### Reference Testbench
 
 - **Primary:** [riscv-tests](https://github.com/riscv-software-src/riscv-tests) (rv32ui-p-*, rv32um-p-*)
 - **Validation method:** Run each test binary through ISS, check `gp` register (x3) for pass/fail
