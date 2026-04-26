@@ -19,7 +19,7 @@ CPP_MMIO   = sim/harness/rv32_dpi_mmio_regs_tb.cpp
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_mmio_regs firmware
+.PHONY: all clean run run_fast run_debug run_mmio_regs firmware
 
 all: run
 
@@ -50,6 +50,23 @@ obj_dir/V$(TOP): $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN)
 
 run: obj_dir/V$(TOP) $(FIRMWARE_BIN)
 	./obj_dir/V$(TOP)
+
+# ---- Performance / debug variants ----
+# Build without trace for faster simulation
+obj_dir/V$(TOP)_fast: $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN)
+	mkdir -p obj_dir
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) \
+	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -o V$(TOP)_fast \
+	  $(SV) $(CPP_ORIG)
+
+run_fast: obj_dir/V$(TOP)_fast $(FIRMWARE_BIN)
+	./obj_dir/V$(TOP)_fast 2>/dev/null
+
+run_debug: obj_dir/V$(TOP) $(FIRMWARE_BIN)
+	./obj_dir/V$(TOP) --trace
 
 # ---- MMIO register config testcase ----
 SV_MMIO = sim/harness/tb_top_mmio_regs.sv

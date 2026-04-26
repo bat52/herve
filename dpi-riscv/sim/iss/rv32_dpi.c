@@ -5,6 +5,16 @@
 #include <string.h>
 #include <stdio.h>
 
+/*
+ * Dependency Policy:
+ * This file must compile with only standard C headers available
+ * in Verilator's DPI compilation environment.
+ * Permitted headers: <stdint.h>, <stdbool.h>, <stddef.h>,
+ *                    <stdlib.h>, <string.h>, <stdio.h>
+ * No libc features beyond malloc/free/memset/memcpy/fopen/fread.
+ * No external libraries, no POSIX APIs.
+ */
+
 #define MMIO_BASE 0x10000000u
 #define MMIO_SIZE 0x00100000u
 
@@ -14,6 +24,12 @@ static uint32_t regs[32];
 static uint32_t pc = 0;
 static uint32_t irq_mask = 0;
 static bool initialized = false;
+
+/* CSR storage */
+static uint32_t csr_mstatus = 0;
+static uint32_t csr_mtvec = 0;
+static uint32_t csr_mepc = 0;
+static uint32_t csr_mcause = 0;
 
 #ifdef __cplusplus
 extern "C" {
@@ -145,7 +161,45 @@ static bool execute_instruction(uint32_t insn) {
     uint32_t next_pc = pc + 4;
 
     switch (opcode) {
-        case 0x33: // OP
+        case 0x33: // OP (register-register ALU)
+            // M-extension: funct7 == 0x01
+            if (funct7 == 0x01) {
+                switch (funct3) {
+                    case 0x0: // MUL
+                        write_reg(rd, (uint32_t)((int64_t)(int32_t)src1 * (int64_t)(int32_t)src2));
+                        break;
+                    case 0x1: // MULH
+                        write_reg(rd, (uint32_t)(((int64_t)(int32_t)src1 * (int64_t)(int32_t)src2) >> 32));
+                        break;
+                    case 0x2: // MULHSU
+                        write_reg(rd, (uint32_t)(((int64_t)(int32_t)src1 * (uint64_t)src2) >> 32));
+                        break;
+                    case 0x3: // MULHU
+                        write_reg(rd, (uint32_t)(((uint64_t)src1 * (uint64_t)src2) >> 32));
+                        break;
+                    case 0x4: // DIV
+                        if (src2 == 0) { write_reg(rd, 0xFFFFFFFFu); break; }
+                        if ((int32_t)src1 == INT32_MIN && (int32_t)src2 == -1) { write_reg(rd, (uint32_t)INT32_MIN); break; }
+                        write_reg(rd, (uint32_t)((int32_t)src1 / (int32_t)src2));
+                        break;
+                    case 0x5: // DIVU
+                        if (src2 == 0) { write_reg(rd, 0xFFFFFFFFu); break; }
+                        write_reg(rd, src1 / src2);
+                        break;
+                    case 0x6: // REM
+                        if (src2 == 0) { write_reg(rd, src1); break; }
+                        if ((int32_t)src1 == INT32_MIN && (int32_t)src2 == -1) { write_reg(rd, 0); break; }
+                        write_reg(rd, (uint32_t)((int32_t)src1 % (int32_t)src2));
+                        break;
+                    case 0x7: // REMU
+                        if (src2 == 0) { write_reg(rd, src1); break; }
+                        write_reg(rd, src1 % src2);
+                        break;
+                }
+                pc = next_pc;
+                return true;
+            }
+            // RV32I base OP instructions
             switch (funct3) {
                 case 0x0:
                     if (funct7 == 0x20) {
@@ -322,9 +376,88 @@ static bool execute_instruction(uint32_t insn) {
         case 0x17: // AUIPC
             write_reg(rd, pc + (insn & 0xfffff000u));
             break;
-        case 0x73: // SYSTEM
-            if (insn == 0x00100073u || insn == 0x00000073u) {
-                return false;
+        case 0x0F: // FENCE / FENCE.I
+            // No-ops in single-threaded ISS with no memory ordering
+            break;
+        case 0x73: // SYSTEM (ECALL, EBREAK, CSR, MRET, WFI)
+            if (funct3 == 0) {
+                // ECALL (0x00000073) or EBREAK (0x00100073)
+                if (insn == 0x00100073u || insn == 0x00000073u) {
+                    return false;
+                }
+                // MRET (0x30200073)
+                if (insn == 0x30200073u) {
+                    pc = csr_mepc;
+                    csr_mstatus |= 0x8; // set MIE
+                    return true;
+                }
+                // WFI (0x10500073) — no-op, handled by polling loop
+                break;
+            }
+            // CSR instructions
+            {
+                uint32_t csr_addr = (insn >> 20) & 0xFFFu;
+                uint32_t csr_val = 0;
+                uint32_t uimm = rd; // for CSRWI variants, immediate is in rd field
+
+                // Read current CSR value
+                switch (csr_addr) {
+                    case 0x300: csr_val = csr_mstatus; break;
+                    case 0x305: csr_val = csr_mtvec;   break;
+                    case 0x341: csr_val = csr_mepc;    break;
+                    case 0x342: csr_val = csr_mcause;  break;
+                    case 0xF11: csr_val = 0x00000000u; break; // mvendorid
+                    case 0xF12: csr_val = 0x00000001u; break; // marchid
+                    case 0xF14: csr_val = 0x00000000u; break; // mhartid
+                    default:    csr_val = 0;            break;
+                }
+
+                uint32_t new_val = csr_val;
+                uint32_t wr_val;
+
+                if (funct3 & 0x4) {
+                    // CSR immediate variants (CSRRWI, CSRRSI, CSRRCI)
+                    wr_val = uimm;
+                } else {
+                    // CSR register variants (CSRRW, CSRRS, CSRRC)
+                    wr_val = src1;
+                }
+
+                switch (funct3) {
+                    case 0x1: // CSRRW
+                        new_val = wr_val;
+                        break;
+                    case 0x2: // CSRRS
+                        new_val = csr_val | wr_val;
+                        break;
+                    case 0x3: // CSRRC
+                        new_val = csr_val & ~wr_val;
+                        break;
+                    case 0x5: // CSRRWI
+                        new_val = wr_val;
+                        break;
+                    case 0x6: // CSRRSI
+                        new_val = csr_val | wr_val;
+                        break;
+                    case 0x7: // CSRRCI
+                        new_val = csr_val & ~wr_val;
+                        break;
+                    default:
+                        break;
+                }
+
+                // Write new CSR value (read-only CSRs skip write)
+                switch (csr_addr) {
+                    case 0x300: csr_mstatus = new_val; break;
+                    case 0x305: csr_mtvec   = new_val; break;
+                    case 0x341: csr_mepc    = new_val; break;
+                    case 0x342: csr_mcause  = new_val; break;
+                    // 0xF11, 0xF12, 0xF14 are read-only — skip write
+                    default: break;
+                }
+
+                // Write old CSR value to rd (rd=0 means skip)
+                write_reg(rd, csr_val);
             }
             break;
         default:
@@ -369,6 +502,36 @@ void rv_init(const char *firmware, int ram_size) {
     }
 }
 
+void rv_init_from_buffer(const uint8_t *data, size_t size, int ram_size) {
+    if (memory != NULL) {
+        free(memory);
+        memory = NULL;
+    }
+
+    if (ram_size <= 0) {
+        ram_size = 1 << 20;
+    }
+
+    memory = (uint8_t *)malloc((size_t)ram_size);
+    if (memory == NULL) {
+        memory_size = 0;
+        initialized = false;
+        return;
+    }
+
+    memory_size = (uint32_t)ram_size;
+    memset(memory, 0, memory_size);
+    memset(regs, 0, sizeof(regs));
+    pc = 0;
+    irq_mask = 0;
+    initialized = true;
+
+    if (data != NULL && size > 0) {
+        size_t copy_size = size < (size_t)ram_size ? size : (size_t)ram_size;
+        memcpy(memory, data, copy_size);
+    }
+}
+
 void rv_reset(uint32_t start_pc) {
     if (!initialized) {
         return;
@@ -379,9 +542,30 @@ void rv_reset(uint32_t start_pc) {
     irq_mask = 0;
 }
 
+/* Count trailing zeros (CTZ) — returns position of lowest set bit */
+static inline unsigned ctz32(uint32_t x) {
+    if (x == 0) return 32;
+    unsigned n = 0;
+    while ((x & 1) == 0) { n++; x >>= 1; }
+    return n;
+}
+
 int rv_step(int max_instructions) {
     if (!initialized || max_instructions <= 0) {
         return 0;
+    }
+
+    /* Check for pending interrupts at start of batch */
+    if (irq_mask != 0) {
+        unsigned cause = ctz32(irq_mask);
+        csr_mcause = cause;
+        csr_mepc = pc;
+        /* Clear the bit we're servicing */
+        irq_mask &= ~(1u << cause);
+        /* Jump to vectored interrupt handler: mtvec + cause * 4 */
+        /* If mtvec[0] == 0 (direct mode), all interrupts go to mtvec */
+        pc = (csr_mtvec & ~0x3u) + cause * 4;
+        return 1;
     }
 
     int executed = 0;
