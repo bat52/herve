@@ -881,13 +881,15 @@ int rv_step(int max_instructions) {
         return 0;
     }
 
-    /* Check for pending interrupts at start of batch */
-    if (irq_mask != 0) {
+    /* Check for pending interrupts at start of batch (only if MIE is set) */
+    if (irq_mask != 0 && (csr_mstatus & 0x8)) {
         unsigned cause = ctz32(irq_mask);
         csr_mcause = cause;
         csr_mepc = pc;
         /* Clear the bit we're servicing */
         irq_mask &= ~(1u << cause);
+        /* Disable interrupts (clear MIE bit in mstatus) during handler */
+        csr_mstatus &= ~0x8u;
         /* Jump to vectored interrupt handler: mtvec + cause * 4 */
         /* If mtvec[0] == 0 (direct mode), all interrupts go to mtvec */
         pc = (csr_mtvec & ~0x3u) + cause * 4;
