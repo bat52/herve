@@ -58,5 +58,4 @@ dkms.conf
 # Generated files
 dpi-riscv/obj_dir/*
 dpi-riscv/firmware.bin
-dpi-riscv/tb_top.vcd
-dpi-riscv/tb_top_irq.vcd
+*.vcd
