@@ -13,7 +13,7 @@ extern "C" {
  * @param firmware Path to the binary firmware file (NULL = no firmware).
  * @param ram_size Size of the shared RAM in bytes.
  */
-void rv_init(const char *firmware, int ram_size);
+void rv_init(const char *firmware, size_t ram_size);
 
 /**
  * Initialize the emulator from an in-memory buffer.
@@ -22,7 +22,7 @@ void rv_init(const char *firmware, int ram_size);
  * @param size Size of firmware data in bytes.
  * @param ram_size Size of the shared RAM in bytes.
  */
-void rv_init_from_buffer(const uint8_t *data, size_t size, int ram_size);
+void rv_init_from_buffer(const uint8_t *data, size_t size, size_t ram_size);
 
 /**
  * Reset the emulator.
@@ -52,6 +52,13 @@ void* rv_get_ram(void);
  * Get current Program Counter.
  */
 uint32_t rv_get_pc(void);
+
+/**
+ * Read a register value.
+ * @param reg Register index (0-31).
+ * @return Current value of the register.
+ */
+uint32_t rv_get_reg(unsigned reg);
 
 #ifdef __cplusplus
 }

@@ -267,22 +267,26 @@ static bool execute_compressed(uint16_t insn) {
                 case 0x3: // C.LUI / C.ADDI16SP (CI)
                 {
                     if (rd == 2) { // C.ADDI16SP
-                        // imm[9:0] encoded as:
-                        // insn[12]=imm[5], insn[6]=imm[7], insn[5]=imm[6],
-                        // insn[4]=imm[8],  insn[3]=imm[9], insn[2]=imm[4]
-                        uint32_t imm = ((insn >> 12) & 0x1u) << 5 |  // imm[5]
-                                       ((insn >> 6)  & 0x1u) << 7 |  // imm[7]
-                                       ((insn >> 5)  & 0x1u) << 6 |  // imm[6]
-                                       ((insn >> 4)  & 0x1u) << 8 |  // imm[8]
-                                       ((insn >> 3)  & 0x1u) << 9 |  // imm[9]
+                        // imm[9:4] encoded as per RISC-V spec:
+                        // insn[12]=imm[9], insn[6]=imm[8], insn[5]=imm[7],
+                        // insn[4]=imm[6],  insn[3]=imm[5], insn[2]=imm[4]
+                        uint32_t imm = ((insn >> 12) & 0x1u) << 9 |  // imm[9]
+                                       ((insn >> 6)  & 0x1u) << 8 |  // imm[8]
+                                       ((insn >> 5)  & 0x1u) << 7 |  // imm[7]
+                                       ((insn >> 4)  & 0x1u) << 6 |  // imm[6]
+                                       ((insn >> 3)  & 0x1u) << 5 |  // imm[5]
                                        ((insn >> 2)  & 0x1u) << 4;   // imm[4]
                         imm = sign_extend(imm, 10);
                         write_reg(2, regs[2] + imm);
                         return true;
                     }
                     if (rd == 0) return true; // hint
-                    uint32_t imm = ((insn >> 12) & 0x1u) << 17 |
-                                   ((insn >> 2) & 0x1fu) << 12;
+                    // C.LUI: 6-bit sign-extended immediate shifted left by 12
+                    // imm[5] = insn[12], imm[4:0] = insn[6:2]
+                    uint32_t imm = ((insn >> 12) & 0x1u) << 5 |
+                                   ((insn >> 2) & 0x1fu);
+                    imm = sign_extend(imm, 6);
+                    imm = imm << 12;
                     if (imm == 0) return false; // illegal
                     write_reg(rd, imm);
                     return true;
@@ -323,18 +327,18 @@ static bool execute_compressed(uint16_t insn) {
                         if (funct1_ca == 0) {
                             // C.SUB / C.XOR / C.OR / C.AND (CA)
                             switch (funct2_low) {
-                                case 0x0: // C.SUB
-                                    write_reg(rd_c, regs[rd_c] - regs[rs2_c]);
-                                    return true;
-                                case 0x1: // C.XOR
-                                    write_reg(rd_c, regs[rd_c] ^ regs[rs2_c]);
-                                    return true;
-                                case 0x2: // C.OR
-                                    write_reg(rd_c, regs[rd_c] | regs[rs2_c]);
-                                    return true;
-                                case 0x3: // C.AND
-                                    write_reg(rd_c, regs[rd_c] & regs[rs2_c]);
-                                    return true;
+                            case 0x0: // C.SUB
+                                write_reg(rs1_c, regs[rs1_c] - regs[rs2_c]);
+                                return true;
+                            case 0x1: // C.XOR
+                                write_reg(rs1_c, regs[rs1_c] ^ regs[rs2_c]);
+                                return true;
+                            case 0x2: // C.OR
+                                write_reg(rs1_c, regs[rs1_c] | regs[rs2_c]);
+                                return true;
+                            case 0x3: // C.AND
+                                write_reg(rs1_c, regs[rs1_c] & regs[rs2_c]);
+                                return true;
                             }
                         } else {
                             // C.SUBW / C.ADDW (RV64) — not supported
@@ -794,17 +798,17 @@ static bool execute_instruction(uint32_t insn) {
     return true;
 }
 
-void rv_init(const char *firmware, int ram_size) {
+void rv_init(const char *firmware, size_t ram_size) {
     if (memory != NULL) {
         free(memory);
         memory = NULL;
     }
 
-    if (ram_size <= 0) {
+    if (ram_size == 0) {
         ram_size = 1 << 20;
     }
 
-    memory = (uint8_t *)malloc((size_t)ram_size);
+    memory = (uint8_t *)malloc(ram_size);
     if (memory == NULL) {
         memory_size = 0;
         initialized = false;
@@ -828,17 +832,17 @@ void rv_init(const char *firmware, int ram_size) {
     }
 }
 
-void rv_init_from_buffer(const uint8_t *data, size_t size, int ram_size) {
+void rv_init_from_buffer(const uint8_t *data, size_t size, size_t ram_size) {
     if (memory != NULL) {
         free(memory);
         memory = NULL;
     }
 
-    if (ram_size <= 0) {
+    if (ram_size == 0) {
         ram_size = 1 << 20;
     }
 
-    memory = (uint8_t *)malloc((size_t)ram_size);
+    memory = (uint8_t *)malloc(ram_size);
     if (memory == NULL) {
         memory_size = 0;
         initialized = false;
@@ -932,4 +936,9 @@ void *rv_get_ram(void) {
 
 uint32_t rv_get_pc(void) {
     return pc;
+}
+
+uint32_t rv_get_reg(unsigned reg) {
+    if (reg >= 32) return 0;
+    return regs[reg];
 }
