@@ -58,8 +58,10 @@ if [ ! -f "$TEST_BIN_DIR/rv32ui-p-simple.bin" ]; then
     mkdir -p "$TEST_BIN_DIR"
     cd "$RISCV_TESTS_DIR/isa"
 
-    # Build RV32UI tests
-    make XLEN=32 RISCV_PREFIX=riscv64-unknown-elf- -j$(nproc) 2>&1 | tail -5
+    # Build targets using -k (continue on error) because the virtual-memory
+    # (-v-) targets try to use the host C compiler for RISC-V assembly and
+    # fail on CI runners.  Only the physical-memory (-p-) targets are needed.
+    make XLEN=32 RISCV_PREFIX=riscv64-unknown-elf- -j$(nproc) -k 2>&1 | tail -5 || true
 
     # Convert ELF to binary
     echo -e "${YELLOW}Converting ELF to binary...${NC}"
