@@ -60,7 +60,6 @@ dkms.conf
 dpi-riscv/obj_dir/*
 dpi-riscv/firmware.bin
 *.vcd
-*.S
 dpi-riscv/rv32_dpi_c_test
 dpi-riscv/rv32_dpi_irq_test
 dpi-riscv/rv32_dpi_test
