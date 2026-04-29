@@ -104,7 +104,7 @@ run: obj_dir/V$(TOP) $(FIRMWARE_BIN)
 obj_dir/V$(TOP)_fast: $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN)
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
-	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) \
+	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
 	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
 	  -o V$(TOP)_fast \
