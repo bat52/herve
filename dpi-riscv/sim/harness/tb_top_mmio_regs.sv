@@ -1,7 +1,7 @@
 module tb_top_mmio_regs;
     reg clk;
     reg rst;
-    reg [31:0] hw_cfg_reg [0:3];
+    reg [31:0] hw_cfg_reg [0:63];
 
     // DPI export: called by ISS on MMIO access
     export "DPI-C" function dpi_mmio_read;
