@@ -161,7 +161,7 @@ run_irq: firmware_irq obj_dir/V$(TOP)_irq
 
 # ---- AHB firmware ----
 $(FIRMWARE_AHB_O): $(FIRMWARE_AHB_S)
-	$(RISCV_PREFIX)-as -march=rv32im -o $@ $<
+	$(RISCV_PREFIX)-as -march=rv32im_zicsr -o $@ $<
 
 $(FIRMWARE_AHB_ELF): $(FIRMWARE_AHB_O)
 	$(RISCV_PREFIX)-ld -m elf32lriscv -Ttext=0x00000000 -o $@ $<

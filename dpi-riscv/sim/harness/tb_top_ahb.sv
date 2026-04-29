@@ -26,7 +26,10 @@ module tb_top_ahb (
     input  wire        ahb_req_write,
     input  wire [31:0] ahb_req_wdata,
     output wire        ahb_req_ready,
-    output wire [31:0] ahb_req_rdata
+    output wire [31:0] ahb_req_rdata,
+    // DUT register outputs (for testbench observability)
+    output wire [31:0] gpio_out,
+    output wire [31:0] gpio_ie
 );
 
     // DPI import: C function to set interrupt mask in ISS
@@ -40,10 +43,6 @@ module tb_top_ahb (
     wire [31:0] hwdata;
     wire        hready;
     wire [31:0] hrdata;
-
-    // GPIO signals from DUT
-    wire [31:0] gpio_out;
-    wire [31:0] gpio_ie;
 
     // GPIO slave select (decoded from address)
     wire        hsel_gpio;

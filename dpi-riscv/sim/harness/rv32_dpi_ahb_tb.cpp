@@ -82,14 +82,9 @@ static void ahb_transaction(uint32_t addr, bool write, uint32_t wdata,
     // De-assert valid
     tb->ahb_req_valid = 0;
 
-    // Tick until BFM returns to IDLE state
-    int idle_timeout = 10;
-    while (idle_timeout > 0) {
+    // Tick until BFM returns to IDLE state (deterministic: 2 cycles max)
+    for (int i = 0; i < 4; ++i) {
         tick(tfp);
-        if (tb->rootp->tb_top_ahb__DOT__ahb_master__DOT__state == 0) {
-            break;
-        }
-        idle_timeout--;
     }
 
     if (timeout == 0) {
