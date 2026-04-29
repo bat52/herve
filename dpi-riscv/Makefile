@@ -185,7 +185,31 @@ obj_dir/V$(TOP)_ahb: $(SV_AHB) $(BUS_SV) $(DUT_SV) $(CPP_AHB) $(C) $(FIRMWARE_AH
 run_ahb: firmware_ahb obj_dir/V$(TOP)_ahb
 	./obj_dir/V$(TOP)_ahb
 
+# ---- Icarus Verilog VPI smoke test (no Verilator) ----
+ICARUS = iverilog
+VVP = vvp
+VPI_SRC = sim/vpi/rv32_dpi_vpi.c
+VPI_VPI = obj_dir/rv32_dpi_vpi.vpi
+TB_ICARUS_SV = sim/icarus/tb_icarus_vpi.sv
+
+TB_ICARUS_VVP = obj_dir/tb_icarus.vvp
+
+$(VPI_VPI): $(VPI_SRC) $(C)
+	mkdir -p obj_dir
+	$(CC) $(CFLAGS) -shared -fPIC -I$(CURDIR)/sim/iss -I/usr/include/iverilog \
+	  -o $@ $(VPI_SRC) $(C)
+
+$(TB_ICARUS_VVP): $(TB_ICARUS_SV)
+	mkdir -p obj_dir
+	$(ICARUS) -g2012 -o $@ $(TB_ICARUS_SV)
+
+run_icarus: firmware $(VPI_VPI) $(TB_ICARUS_VVP)
+	$(VVP) -Mobj_dir -mrv32_dpi_vpi $(TB_ICARUS_VVP)
+
+.PHONY: run_icarus
+
 # ---- Standalone ISS test (no Verilator, no RISC-V toolchain) ----
+
 
 rv32_dpi_test: sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c
 	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c

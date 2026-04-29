@@ -79,7 +79,16 @@ else
     echo "  verilator     : NOT found (Verilator-based tests will be skipped)"
 fi
 
+HAS_ICARUS=0
+if command -v iverilog &>/dev/null && command -v vvp &>/dev/null; then
+    HAS_ICARUS=1
+    echo "  iverilog/vvp  : found"
+else
+    echo "  iverilog/vvp  : NOT found (Icarus VPI tests will be skipped)"
+fi
+
 echo ""
+
 
 # ---------------------------------------------------------------------------
 # Pre-clean
@@ -123,11 +132,26 @@ run_test "run_riscv_tests"     "run_riscv_tests"     "$SKIP_ISS"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 3. Verilator-based tests  (need g++ + toolchain + Verilator)
+# 3. Icarus Verilog VPI tests  (need toolchain + iverilog)
 # ---------------------------------------------------------------------------
 echo "============================================"
-echo " 3. Verilator-based tests"
+echo " 3. Icarus Verilog VPI tests"
 echo "============================================"
+
+SKIP_ICARUS=
+[ "$HAS_TOOLCHAIN" -eq 0 ]  && SKIP_ICARUS="no RISC-V toolchain"
+[ "$HAS_ICARUS" -eq 0 ]     && SKIP_ICARUS="no iverilog/vvp"
+
+run_test "run_icarus"         "run_icarus"          "$SKIP_ICARUS"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 4. Verilator-based tests  (need g++ + toolchain + Verilator)
+# ---------------------------------------------------------------------------
+echo "============================================"
+echo " 4. Verilator-based tests"
+echo "============================================"
+
 
 SKIP_VLT=
 [ "$HAS_GXX" -eq 0 ]        && SKIP_VLT="no g++"
