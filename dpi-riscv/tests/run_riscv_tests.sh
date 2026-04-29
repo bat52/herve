@@ -64,14 +64,18 @@ if [ ! -f "$TEST_BIN_DIR/rv32ui-p-simple.bin" ]; then
     make XLEN=32 RISCV_PREFIX=riscv64-unknown-elf- -j$(nproc) -k 2>&1 | tail -5 || true
 
     # Convert ELF to binary
+    # NOTE: riscv-tests Makefile produces bare-named files (no .elf extension),
+    # e.g. rv32ui-p-add, rv32um-p-mul, etc.  The .S source lives under the
+    # subdirectory (rv32ui/add.S) but the output lands directly in isa/.
     echo -e "${YELLOW}Converting ELF to binary...${NC}"
-    for elf in "$RISCV_TESTS_DIR/isa/rv32ui-p-"*.elf \
-               "$RISCV_TESTS_DIR/isa/rv32um-p-"*.elf \
-               "$RISCV_TESTS_DIR/isa/rv32uc-p-"*.elf; do
-        if [ -f "$elf" ]; then
-            base="$(basename "$elf" .elf)"
+    for pattern in rv32ui-p- rv32um-p- rv32uc-p-; do
+        for elf in "$RISCV_TESTS_DIR/isa/$pattern"*; do
+            # Skip directories and dump/hex files
+            [ -f "$elf" ] || continue
+            case "$elf" in *.dump|*.hex) continue ;; esac
+            base="$(basename "$elf")"
             riscv64-unknown-elf-objcopy -O binary "$elf" "$TEST_BIN_DIR/$base.bin"
-        fi
+        done
     done
 
     echo -e "${GREEN}Build complete.${NC}"
@@ -82,7 +86,7 @@ fi
 # --------------------------------------------------
 # Step 3: Count test binaries
 # --------------------------------------------------
-NUM_BINS=$(ls "$TEST_BIN_DIR"/*.bin 2>/dev/null | wc -l)
+NUM_BINS=$(ls "$TEST_BIN_DIR"/*.bin 2>/dev/null | wc -l) || true
 echo -e "Found ${YELLOW}$NUM_BINS${NC} test binaries."
 echo ""
 
