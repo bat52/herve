@@ -2,8 +2,8 @@
 
 > **Generated:** 2026-04-26
 > **Purpose:** Step-by-step implementation guide for building features described in `dpi.md`
-> **Status:** Core ISS complete (RV32I + M + C + CSR + IRQ); AHB BFM, IRQ examples, ISA validation runner all done; docs/performance tuning remaining
-> **Last updated:** 2026-04-30 — All Phase 1 (M, C, FENCE, CSR, IRQ), Phase 4/6 (AHB BFM, IRQ examples), Phase 5 (ISA validation runner) now implemented
+> **Status:** Core ISS complete (RV32I + M + C + CSR + IRQ); AHB BFM, IRQ examples, ISA validation runner all done; docs/performance tuning remaining; cross-simulator verification strategy defined
+> **Last updated:** 2026-04-30 — Phase 8 added: cross-simulator verification (Icarus, ModelSim, four-tier strategy)
 
 ---
 
@@ -16,7 +16,8 @@
 5. [Phase 5 — ISA Support Comparison](#phase-5--isa-support-comparison)
 6. [Phase 6 — RTL Coupling, IRQ](#phase-6--rtl-coupling-irq)
 7. [Phase 7 — Performance Tuning](#phase-7--performance-tuning)
-8. [Dependency & Build Order](#dependency--build-order)
+8. [Phase 8 — Cross-Simulator Verification](#phase-8--cross-simulator-verification)
+9. [Dependency & Build Order](#dependency--build-order)
 
 ---
 
@@ -869,13 +870,357 @@ run_debug: obj_dir/V$(TOP)
 
 ---
 
+## Phase 8 — Cross-Simulator Verification
+
+### Motivation
+
+The project currently verifies the ISS exclusively with **Verilator**. While Verilator's DPI-C support is excellent for compiled simulation, verifying the ISS SV integration with other simulators improves confidence that the DPI patterns used are standard-compliant and identifies simulator-specific bugs early.
+
+### 8.1 Simulator Comparison
+
+| Simulator | DPI Support | License | Ubuntu Package | Ease of Setup | Recommendation |
+|-----------|------------|---------|----------------|---------------|----------------|
+| **Verilator** (v5.020) | ✅ Full DPI-C import/export | GPL/LGPL | `apt install verilator` | ✅ Installed | **Primary target** (already works) |
+| **Icarus Verilog** (v12.0) | ⚠️ Partial DPI-C (import, export via `-g2005-sv`) | GPL | `apt install iverilog` | ✅ One command | **Best free alternative** |
+| **GTKWave** (v3.3) | N/A (viewer only) | GPL | `apt install gtkwave` | ✅ One command | Waveform viewer only |
+| **ModelSim Intel FPGA Starter** | ✅ Full DPI-C (IEEE 1800) | Free (registration req.) | Manual install | ⚠️ ~3GB, needs Quartus | **Gold standard** but heavy |
+| **Questa** (Intel/AMD) | ✅ Full DPI-C | Commercial | N/A | ❌ License req. | Not viable for CI |
+| **Xsim** (Vivado) | ✅ DPI-C support | Free (with Vivado) | Manual install | ⚠️ ~20GB | Overkill for this project |
+| **ncsim/irun** (Cadence) | ✅ Full DPI-C | Commercial | N/A | ❌ License req. | Not viable for CI |
+| **VCS** (Synopsys) | ✅ Full DPI-C | Commercial | N/A | ❌ License req. | Not viable for CI |
+| **CVC** (Cver) | ❌ No DPI-C support | Free | `apt install verilator` | ✅ | Obsolete, not recommended |
+
+**Conclusion: Icarus Verilog is the only practical free alternative.** It is available in the default Ubuntu repos, installs with a single `apt` command, and supports DPI-C (though with some limitations compared to Verilator).
+
+### 8.2 Icarus Verilog DPI Support — Detailed Analysis
+
+#### 8.2.1 What Icarus Supports
+
+Icarus Verilog (v12.0, `-g2005-sv` flag) supports:
+
+- **DPI-C imports** — Calling C functions from Verilog (`import "DPI-C" function ...`)
+- **DPI-C exports** — Calling Verilog functions from C (`export "DPI-C" function ...`) via VPI
+- **`svSetScope` / `svGetScopeFromName`** — Scope management (same API as Verilator)
+- **`$dumpvars` / `$dumpfile`** — VCD generation (with `-g2005-sv` or `-g2012`)
+
+#### 8.2.2 Key Differences from Verilator
+
+| Aspect | Verilator | Icarus Verilog |
+|--------|-----------|----------------|
+| **Execution model** | Compiled C++ translation (cycle-accurate) | Event-driven (interpreted via vvp) |
+| **DPI export linkage** | Direct C++ function calls in compiled model | Uses VPI shared library (`.vpi` / `.so`) loaded with `-m` flag |
+| **`@(posedge clk)` inside DPI exports** | ❌ Not supported (recursive eval) | ✅ Supported (native event scheduling) |
+| **`--timing` flag needed** | ✅ for timing controls | ❌ Native |
+| **`string` type in DPI** | ⚠️ Supported via `const char*` | ⚠️ Supported via `const char*` |
+| **SystemVerilog features** | Broad support (SV 2017 mostly) | Basic SV (SV 2005 subset) |
+| **`export "DPI-C" function` from portless module** | ✅ Supported | ⚠️ Module must have at least one port or be wrapped |
+| **Build flow** | `verilator --cc --exe --build` produces binary directly | `iverilog -o sim.vvp` + `vvp -M. -m module sim.vvp` two-step |
+
+#### 8.2.3 DPI Export Mechanics in Icarus
+
+Icarus does **not** allow Verilog DPI exports to be called directly from C code as regular functions. Instead, it uses the **VPI (Verilog Procedural Interface)** mechanism:
+
+1. Compile Verilog: `iverilog -g2005-sv -o sim.vvp tb_top.sv`
+2. Compile C code into a shared library: `gcc -shared -o dpi_mod.vpi -I/path/to/vvp dpi_wrapper.c rv32_dpi.c`
+3. Run: `vvp -M. -m dpi_mod sim.vvp`
+
+The `.vpi` module is loaded as a shared library, and Icarus resolves DPI export symbols from it. A `register()` function in the `.vpi` module tells Icarus where to find each DPI export.
+
+#### 8.2.4 Architectural Impact
+
+The current C++ testbenches (`rv32_dpi_tb.cpp`) use **direct model access**:
+
+```cpp
+// Direct model access — works ONLY with Verilator
+extern "C" int dpi_mmio_read(int addr) {
+    return tb->mem_read;  // Vtb_top pointer
+}
+```
+
+For Icarus, the DPI callbacks must be written as **pure C functions** (no C++ model access) that use the VPI/scope mechanism to interact with SV signals. This means the same `dpi_mmio_read`/`dpi_mmio_write` functions take different approaches depending on the simulator.
+
+**Proposed architecture for simulator abstraction:**
+
+```
+                    +-------------------+
+                    |   rv32_dpi.c       |  (pure C, simulator-agnostic)
+                    |   ISS core         |
+                    +--------+----------+
+                             |
+                    dpi_mmio_read / write calls
+                             |
+                    +--------v----------+
+                    | dpi_bridge layer   |  (one implementation per simulator)
+                    +--------+----------+
+                             |
+              +--------------+--------------+
+              |              |              |
+     Verilator bridge   Icarus bridge    ModelSim bridge
+     (direct model      (VPI shared      (svSetScope +
+      access)            library)         standard DPI)
+```
+
+### 8.3 Icarus Verilog — Implementation Roadmap
+
+#### Phase 8.3.1: Prerequisites
+
+```bash
+# Install Icarus Verilog
+sudo apt install iverilog
+
+# Verify installation
+iverilog -V
+# Should show: Icarus Verilog version 12.0 (stable) or later
+
+# Install VPI development headers (needed for DPI exports)
+dpkg -L iverilog | grep vpi_user.h
+# Should show: /usr/include/iverilog/vpi_user.h
+```
+
+#### Phase 8.3.2: Minimal Icarus Smoke Test (No DPI)
+
+**Goal:** Verify Icarus can parse the existing SV files without modification.
+
+```bash
+# Test basic SV parsing
+cd dpi-riscv
+iverilog -g2005-sv -o /tmp/test_syntax.vvp sim/harness/tb_top.sv 2>&1 || true
+```
+
+**Expected issues to resolve:**
+- Icarus may error on SystemVerilog constructs that Verilator accepts.
+- `export "DPI-C"` inside a module with no ports might need wrapping.
+- The `always @(*)` combinational blocks are fine (Icarus supports them).
+- The `typedef enum logic [1:0]` in `ahb_lite_bfm.sv` may need `-g2012` flag.
+
+**Mitigation:** Create an Icarus-compatible wrapper for `tb_top_mmio_regs.sv` (which has no ports and is simplest — only 35 lines). This is the easiest testbench to port first.
+
+#### Phase 8.3.3: Implement Icarus DPI Bridge
+
+**File:** `dpi-riscv/sim/icarus/icarus_dpi_bridge.c`
+
+```c
+/*
+ * Icarus DPI bridge — implements dpi_mmio_read / dpi_mmio_write
+ * using VPI to drive signal values instead of direct model access.
+ *
+ * Compile as a shared library:
+ *   gcc -shared -o icarus_dpi_bridge.vpi -I/usr/include/iverilog \
+ *       icarus_dpi_bridge.c ../iss/rv32_dpi.c
+ *
+ * Run:
+ *   iverilog -g2005-sv -o sim.vvp tb_top_mmio_regs.sv
+ *   vvp -M. -m icarus_dpi_bridge sim.vvp
+ */
+
+#include <vpi_user.h>
+#include <stdio.h>
+#include <stdint.h>
+#include "rv32_dpi.h"
+
+// Forward declarations of DPI export implementations
+extern uint32_t dpi_mmio_read(uint32_t addr);
+extern void dpi_mmio_write(uint32_t addr, uint32_t value);
+
+// VPI handles for SV signals (cached for performance)
+static vpiHandle hw_cfg_reg_handle = NULL;
+
+static void init_vpi_handles(void) {
+    if (hw_cfg_reg_handle != NULL) return;
+
+    vpiHandle top = vpi_handle_by_name((PLI_BYTE8*)"tb_top_mmio_regs", NULL);
+    if (top == NULL) {
+        fprintf(stderr, "ERROR: Cannot find tb_top_mmio_regs module\n");
+        return;
+    }
+    // Cache signal handles for efficient MMIO callbacks
+}
+
+// DPI export implementations as VPI callbacks
+PLI_INT32 dpi_mmio_read_cb(PLI_BYTE8 *user_data) {
+    // ... VPI-based read implementation
+    return 0;
+}
+
+// Registration function — called by vvp when shared library is loaded
+void (*vlog_startup_routines[])() = {
+    register_dpi_bridge,
+    0
+};
+```
+
+**Note:** The VPI approach is more complex than Verilator's direct model access. An alternative simpler approach for Icarus is to write a **pure-SV testbench** that uses DPI imports to call `rv_step()`, `rv_init()`, etc. directly from the SV side, avoiding the need for C-side signal access altogether:
+
+```systemverilog
+// Pure-SV testbench using DPI imports (simpler Icarus approach)
+module tb_icarus;
+    import "DPI-C" function void rv_init(string firmware, int ram_size);
+    import "DPI-C" function void rv_reset(int pc);
+    import "DPI-C" function int  rv_step(int max_insn);
+    import "DPI-C" function int  rv_get_reg(int reg);
+
+    // SV-side MMIO registers
+    reg [31:0] mmio_regs [0:63];
+
+    export "DPI-C" function dpi_mmio_read;
+    export "DPI-C" function dpi_mmio_write;
+
+    function int dpi_mmio_read(int addr);
+        if (addr >= 32'h1000_0000 && addr < 32'h1000_0100) begin
+            dpi_mmio_read = mmio_regs[(addr - 32'h1000_0000) / 4];
+        end else begin
+            dpi_mmio_read = 32'h0;
+        end
+    endfunction
+
+    function void dpi_mmio_write(int addr, int data);
+        if (addr >= 32'h1000_0000 && addr < 32'h1000_0100) begin
+            mmio_regs[(addr - 32'h1000_0000) / 4] = data;
+        end
+    endfunction
+
+    initial begin
+        $dumpfile("tb_icarus.vcd");
+        $dumpvars(0, tb_icarus);
+
+        // Load firmware into ISS
+        rv_init("firmware.bin", 1 << 20);
+        rv_reset(0);
+
+        // Execute firmware
+        int insn = rv_step(100);
+        $display("Executed %0d instructions", insn);
+        $display("MMIO[0] = 0x%08x", mmio_regs[0]);
+
+        $finish;
+    end
+endmodule
+```
+
+**This pure-SV approach is recommended for Icarus.** It avoids the complexity of VPI shared libraries entirely, and works with Icarus's native DPI-C import/export capabilities. The downside is it cannot drive RTL clocks or instantiate RTL DUTs — but it's sufficient for verifying the ISS→DPI→SV→MMIO round-trip.
+
+#### Phase 8.3.4: Icarus Test Targets
+
+Add to `dpi-riscv/Makefile`:
+
+```makefile
+# ---- Icarus Verilog test targets ----
+
+ICARUS ?= iverilog
+ICARUS_FLAGS = -g2005-sv
+
+# Pure-SV smoke test with Icarus
+obj_dir/tb_icarus.vvp: sim/iss/rv32_dpi.c sim/iss/rv32_dpi.h tests/tb_icarus.sv
+	mkdir -p obj_dir
+	$(CC) $(CFLAGS) -shared -fPIC -o obj_dir/rv32_dpi_icarus.so \
+	      -I$(CURDIR)/sim/iss $(C) -I/usr/include/iverilog
+	$(ICARUS) $(ICARUS_FLAGS) -o $@ tests/tb_icarus.sv
+
+run_icarus: obj_dir/tb_icarus.vvp $(FIRMWARE_BIN)
+	vvp -Mobj_dir -mrv32_dpi_icarus $<
+```
+
+### 8.4 ModelSim / Questa
+
+#### 8.4.1 Assessment
+
+ModelSim and Questa (Intel/AMD versions) are the industry-standard Verilog simulators with full IEEE 1800-2017 DPI-C compliance. However:
+
+| Version | License | Availability | Verdict |
+|---------|---------|-------------|---------|
+| **ModelSim Intel FPGA Starter Edition** | Free (web registration) | Requires Quartus Prime Lite download (~3GB) | ✅ Feasible but heavy for CI |
+| **Questa Intel FPGA Edition** | Free (with Quartus) | Same download | Same as above |
+| **ModelSim SE / DE** | Commercial | License server required | ❌ Not for CI |
+| **Questa Advanced Simulator** | Commercial | License server required | ❌ Not for CI |
+
+#### 8.4.2 DPI Compatibility
+
+ModelSim/Questa would work with the **current SV code almost verbatim** because:
+
+1. The `export "DPI-C" function dpi_mmio_read/write` declarations are IEEE 1800 standard.
+2. The DPI import `rv_set_irq()` is standard.
+3. The `ahb_lite_bfm.sv` uses `@(posedge clk)` in tasks — works natively in event-driven simulators.
+4. The auto-generated DPI stubs (that Verilator normally creates and we suppress) are not needed.
+
+**The only change needed** for ModelSim would be proper scope management in the C++ testbench (as described in Phase 3.2). ModelSim's `-dpiheader` flag can generate C headers for the DPI exports automatically.
+
+#### 8.4.3 Practical Recommendation
+
+Given the installation complexity (~3GB download), ModelSim is **not recommended for CI pipelines** unless the project already has access to it. Reserve ModelSim verification for:
+
+- Pre-release validation of DPI portability
+- Debugging DPI scope issues that are simulator-specific (e.g., `svSetScope` behavior)
+- Formal compliance checking when the SV code uses more advanced SV features
+
+### 8.5 Verification Strategy — Four Tiers
+
+```
+                    ┌─────────────────────────────────────┐
+                    │  Tier 1: Standalone ISS             │
+                    │  (no simulator needed)               │
+                    │                                     │
+                    │  • make run_standalone               │
+                    │  • make run_c_test                   │
+                    │  • make run_riscv_tests              │
+                    │  • make run_irq_standalone           │
+                    │                                     │
+                    │  Run on every commit                 │
+                    └──────────┬──────────────────────────┘
+                               │
+                    ┌──────────v──────────────────────────┐
+                    │  Tier 2: Verilator                  │
+                    │  (primary SV co-sim target)          │
+                    │                                     │
+                    │  • make run (or run_fast/run_debug)  │
+                    │  • make run_mmio_regs                │
+                    │  • make run_muldiv                   │
+                    │  • make run_irq                      │
+                    │  • make run_ahb                      │
+                    │                                     │
+                    │  Run on every commit                 │
+                    └──────────┬──────────────────────────┘
+                               │
+                    ┌──────────v──────────────────────────┐
+                    │  Tier 3: Icarus Verilog             │
+                    │  (DPI compatibility check)           │
+                    │                                     │
+                    │  • make run_icarus                   │
+                    │    (pure-SV DPI smoke test)          │
+                    │                                     │
+                    │  Run nightly / before releases       │
+                    └──────────┬──────────────────────────┘
+                               │
+                    ┌──────────v──────────────────────────┐
+                    │  Tier 4: ModelSim/Questa            │
+                    │  (gold standard DPI compliance)      │
+                    │                                     │
+                    │  • Manual run before major releases  │
+                    │  • Required for advanced SV features │
+                    └─────────────────────────────────────┘
+```
+
+### 8.6 Implementation Checklist
+
+- [ ] **8.6.1** Install Icarus Verilog: `sudo apt install iverilog`
+- [ ] **8.6.2** Create pure-SV Icarus testbench (`tests/tb_icarus.sv`) that uses DPI imports to call ISS functions directly
+- [ ] **8.6.3** Verify Icarus can parse all existing SV files (catch syntax incompatibilities early)
+- [ ] **8.6.4** Add Icarus `Makefile` target (`make run_icarus`)
+- [ ] **8.6.5** Verify ISS→DPI→SV→MMIO round-trip works under Icarus
+- [ ] **8.6.6** Document Icarus-specific limitations in `docs/integration.md`
+- [ ] **8.6.7** (Optional) Evaluate ModelSim Intel FPGA Starter for pre-release DPI compliance checking
+- [ ] **8.6.8** Add CI job for Tier 1 (standalone) and Tier 2 (Verilator); optionally Tier 3 (Icarus)
+
+---
+
 ## Dependency & Build Order
+
 
 ```
 All Phases 1-6 are now complete.
-Remaining work: Phase 7 (Performance tuning)
+Remaining work: Phases 7 & 8
      ↓
 Phase 7 (Performance tuning — can iterate alongside any phase)
+Phase 8 (Cross-simulator verification — independent of Phase 7)
 ```
 
 ### Quick Wins (First Week) — ✅ All Completed
