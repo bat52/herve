@@ -409,8 +409,10 @@ static bool execute_compressed(uint16_t insn) {
                     return false;
                 case 0x2: // C.LWSP (CI)
                 {
-                    // offset = {insn[6:2], 2'b00} — 8-bit unsigned, word-aligned
-                    uint32_t offset = ((insn >> 2) & 0x1fu) << 2;
+                    // offset = {insn[6:5], insn[12], insn[4:2], 2'b00} — 8-bit unsigned, word-aligned
+                    uint32_t offset = ((insn >> 5) & 0x3u) << 6 |   // imm[7:6] = insn[6:5]
+                                      ((insn >> 12) & 0x1u) << 5 |  // imm[5] = insn[12]
+                                      ((insn >> 2) & 0x7u) << 2;    // imm[4:2] = insn[4:2]
                     uint32_t addr = regs[2] + offset; // sp = x2
                     write_reg(rd, read_u32(addr));
                     return true;
@@ -910,10 +912,15 @@ int rv_step(int max_instructions) {
         if ((insn & 0x3u) != 0x3u) {
             /* 16-bit compressed instruction */
             uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+            uint32_t pc_before = pc;
             if (!execute_compressed(c_insn)) {
                 break;
             }
-            pc += 2;
+            /* Jump/branch compressed instructions already update pc.
+             * For non-jump instructions (which do not change pc), advance by 2 bytes. */
+            if (pc == pc_before) {
+                pc += 2;
+            }
         } else {
             if (!execute_instruction(insn)) {
                 break;

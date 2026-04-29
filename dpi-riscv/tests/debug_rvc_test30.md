@@ -1,12 +1,11 @@
 # Debug Plan: rv32uc-p-rvc Test Case 30
 
-## Status
+## Final Status
 
-- **47/48 tests pass** in `run_riscv_tests.sh`
-- **Sole failure:** `rv32uc-p-rvc` with **gp=61**
-- gp=61 decodes as: `gp = (TESTNUM << 1) | 1 → TESTNUM = 30`
-- **CA-format fix applied already** (rd_c → rs1_c for C.SUB/C.XOR/C.OR/C.AND).
-  Before this fix, gp was 31 (test case 15); now gp=61 (test case 30), so the C.SUB fix helped pass test 15.
+- **FIXED — 48/48 tests PASS (0 FAIL, 0 SKIP)**
+- Two root causes were found and fixed:
+  1. **`rv_step()` always added `pc += 2` after compressed instructions** — even after jumps/branches that already set `pc`
+  2. **C.LWSP immediate encoding used wrong bit layout** — used simple CI-format `{insn[6:2], 2'b00}` instead of the correct scattered layout `{insn[6:5], insn[12], insn[4:2], 2'b00}`
 
 ---
 
@@ -30,126 +29,233 @@ RVC_TEST_CASE (30, ra, 0,              # expects ra=0 after execution
 3. `c.j 1f` → jump forward, skip `2:j fail`, land at `1:)`
 4. Falls through — ra still 0, test passes
 
-**What gp=61 means:** The test reached `2:j fail`, which jumps to `write_tohost` → calls `RVTEST_FAIL` → sets gp=61 and ECALLs.
+---
 
-**There are two possible root causes:**
-- (A) The first `c.j` jumps to the wrong address, landing on `c.j 2f` instead of `1:c.j 1f`
-- (B) The second `c.j` (`1:c.j 1f`) jumps to the wrong address, landing on `2:j fail` instead of `1:)`
+## 2. Root Cause #1: `pc += 2` After Compressed Jumps
+
+### The Bug
+
+In `rv_step()`, after executing a compressed instruction, the code unconditionally did:
+
+```c
+if ((insn & 0x3u) != 0x3u) {
+    uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+    if (!execute_compressed(c_insn)) break;
+    pc += 2;  // BUG: Always adds 2, even after jumps!
+}
+```
+
+For jump-type compressed instructions (C.J, C.JAL, C.JALR, C.JR, C.BEQZ, C.BNEZ), `execute_compressed()` already sets `pc` to the jump target. The `pc += 2` then corrupts `pc`, making execution continue at jump target + 2 bytes.
+
+### How It Affected Test 30
+
+Disassembly of the test 30 region (from `riscv-tests/isa/rv32uc-p-rvc`):
+
+```
+80002130: 01e00193    li gp,30
+80002134: 4081        li ra,0
+80002136: a011        j 8000213a    (C.J, insn=0xa011, offset=+4)
+80002138: a011        j 8000213c    (C.J, should NOT execute)
+8000213a: a011        j 8000213e    (C.J, insn=0xa011, offset=+4)
+8000213c: a211        j 80002240    (j fail, should NOT execute)
+8000213e: 0001        nop
+```
+
+With the bug:
+1. `c.j` at `0x80002136` sets `pc = 0x8000213a` (correct)
+2. Then `pc += 2` pushes `pc` to `0x8000213c` **(WRONG — lands on `j fail`)**
+3. Test fails with gp=61
+
+### The Fix
+
+Track whether `pc` changed during compressed instruction execution:
+
+```c
+if ((insn & 0x3u) != 0x3u) {
+    uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+    uint32_t pc_before = pc;
+    if (!execute_compressed(c_insn)) break;
+    if (pc == pc_before) {
+        pc += 2;
+    }
+}
+```
+
+Non-jump instructions leave `pc` unchanged, so `pc += 2` applies normally. Jump/branch instructions modify `pc` during execution, so `pc += 2` is skipped.
 
 ---
 
-## 2. Step-by-Step Debug
+## 3. Root Cause #2: C.LWSP Immediate Encoding Bug
+
+After fixing root cause #1, test 30 passed (gp=3 = PASS) but the overall test failed at gp=81 (test case 40). Test 40 involves `C.LWSP` and `C.SWSP` stack operations.
+
+### The Bug
+
+The original C.LWSP decoder used a simple CI-format immediate extraction:
+
+```c
+// WRONG: offset = {insn[6:2], 2'b00}
+uint32_t offset = ((insn >> 2) & 0x1fu) << 2;
+```
+
+This treats bits `[6:2]` as a contiguous 5-bit field shifted left by 2. But C.LWSP has a **non-standard** immediate layout where `insn[12]` is interleaved between bits [5] and [4]:
+
+| Offset bits | Source bits in instruction |
+|-------------|----------------------------|
+| imm[7:6]    | insn[6:5]                  |
+| imm[5]      | insn[12]                   |
+| imm[4:2]    | insn[4:2]                  |
+| imm[1:0]    | 0 (implicit)               |
+
+### Example: Instruction 0x4532
+
+For `insn=0x4532` — binary `0100 0101 0011 0010`:
+- C.LWSP encoding: funct3=010, rd=01010(x10), offset bits scattered
+
+Old decoder computed: `(0x4532 >> 2) & 0x1f = 0x0C → offset = 0x0C << 2 = 48`
+Correct offset: `{01, 0, 001, 00}` = binary `01000100` = **68**
+
+### The Fix
+
+```c
+// offset = {insn[6:5], insn[12], insn[4:2], 2'b00}
+uint32_t offset = ((insn >> 5) & 0x3u) << 6 |   // imm[7:6] = insn[6:5]
+                  ((insn >> 12) & 0x1u) << 5 |  // imm[5] = insn[12]
+                  ((insn >> 2) & 0x7u) << 2;    // imm[4:2] = insn[4:2]
+```
+
+### C.SWSP Encoder Verification
+
+The C.SWSP decoder was checked and verified correct:
+
+```c
+// offset[7:6] = insn[11:10], offset[5:4] = insn[6:5]
+uint32_t offset = ((insn >> 10) & 0x3u) << 6 |
+                  ((insn >> 5) & 0x3u) << 4;
+```
+
+This matches the RISC-V specification and the `make_c_swsp()` encoder in `rv32_dpi_c_test.cpp`.
+
+---
+
+## 4. Step-by-Step Debug (Archived)
 
 ### Step 2a: Disassemble the Binary
-
-Extract the exact instruction encoding around test case 30.
 
 ```bash
 riscv64-unknown-elf-objdump -d riscv-tests/isa/rv32uc-p-rvc.elf \
   | sed -n '/TEST_CASE 30/,/TEST_CASE 31/p'
 ```
 
-Check which 16-bit values the assembler generated for the C.J instructions. The C.J encoding is:
+Confirmed the C.J instruction `0xa011` encodes offset=+4:
+- bits [12:8] = 00001 → offset bits [11,4,9,8,10] = 0
+- bits [7:2] = 000100 → offset bits [6,7,3:1,5] = {0,0,001,0} = offset[6]=0, offset[5]=0, offset[3:1]=001=1, offset[7]=0
+- offset = {0,0,0,0,0,0,0,001,0} with bit[0]=0 → 0b00000100 = +4
+
+### Step 2b-2e: Add Trace Mode
+
+Trace mode was added to `rv32_dpi.c` via compiler flags to confirm:
+- C.J offset is correct (+4 for `0xa011`)
+- Stale-PC detection does not fire (instructions < 50000 limit)
+- No register corruption from prior tests
+
+### C.J Encoding Cross-Check
+
+| Offset bit | C.J encoding | ISS decoder | Match? |
+|------------|-------------|-------------|--------|
+| 0          | 0 (implied) | 0 (implied) | ✓ |
+| 1          | insn[3]     | `((insn >> 3) & 0x7u) << 1` | ✓ |
+| 2          | insn[4]     | (same as above) | ✓ |
+| 3          | insn[5]     | (same as above) | ✓ |
+| 4          | insn[11]    | `((insn >> 11) & 0x1u) << 4` | ✓ |
+| 5          | insn[2]     | `((insn >> 2) & 0x1u) << 5` | ✓ |
+| 6          | insn[7]     | `((insn >> 7) & 0x1u) << 6` | ✓ |
+| 7          | insn[6]     | `((insn >> 6) & 0x1u) << 7` | ✓ |
+| 8          | insn[9]     | `((insn >> 9) & 0x3u) << 8` | ✓ |
+| 9          | insn[10]    | (same as above) | ✓ |
+| 10         | insn[8]     | `((insn >> 8) & 0x1u) << 10` | ✓ |
+| 11         | insn[12]    | `((insn >> 12) & 0x1u) << 11` | ✓ |
+
+C.J encoding was confirmed **CORRECT**. The root cause was the `pc += 2` bug, not the C.J decoder.
+
+---
+
+## 5. Test Results
+
+### Final Validation
 
 ```
-bit 15 14 13 12 | 11 10  9  8  7  6  5  4 |  3  2  1  0
- funct3=5=101  | imm[11] 4 9 8 10 6 7 3 1 | 1  0  1  0
-                | 12  11 10 9 8  7 6 5  4 |
+=== RISC-V Tests Validation Suite ===
+Found 48 test binaries
+
+  [PASS] rv32uc-p-rvc (253 insn)
+  [PASS] rv32ui-p-add (499 insn)
+  [PASS] rv32ui-p-addi (276 insn)
+  ... (all 48 pass) ...
+
+===========================
+  Total:   48
+  Passed:  48
+  Failed:   0
+  Skipped:  0
+===========================
 ```
 
-Offset[11] = insn[12], offset[10] = insn[8], offset[9:8] = insn[10:9],
-offset[7] = insn[6], offset[6] = insn[7], offset[5] = insn[2],
-offset[4] = insn[11], offset[3:1] = insn[5:3], offset[0] = 0.
+### Standalone C Tests
 
-Verify by extracting the bits from the raw instruction and computing the expected offset.
+```
+=== RV32C (Compressed) Extension Test ===
+  [PASS] C.LI x6, 42              = 0x0000002a
+  [PASS] C.ADDI x6, 10            = 0x00000034
+  [PASS] C.NOP                      = 0x00000034
+  [PASS] C.MV x7, x6               = 0x00000034
+  [PASS] C.ADD x7, x6              = 0x00000068
+  [PASS] C.LUI x8, 0x10000         = 0x10000000
+  [PASS] C.LW x9, 0(x8)            = 0x0000002a
+  [PASS] C.SW x9, 8(x8)            = 0x0000002a
+  [PASS] C.SLLI x6, 2              = 0x000000d0
+  [PASS] C.SRLI x9, 2              = 0x0000000a
+  [PASS] C.ANDI x9, 0xF            = 0x0000000a
+  [PASS] C.SUB x9, x9              = 0x00000000
+  [PASS] C.XOR x9, x9              = 0x00000000
+  [PASS] C.OR x9, x9               = 0x00000000
+  [PASS] C.AND x9, x9              = 0x00000000
+  [PASS] C.LWSP x10, 0(sp)         = 0x00000000
+  [PASS] C.SWSP x6, 0(sp)          = 0x000000d0
+  [PASS] C.ADDI4SPN x11, 16        = 0x00080010
+  [PASS] C.ADDI16SP -32            = 0x0007ffe0
+  [PASS] C.J (jump over NOP)        = 0x00000001
+  [PASS] C.BEQZ taken               = 0x00000001
+  [PASS] C.BNEZ taken               = 0x00000001
+  [PASS] C.SRAI x6, 2              = 0x00000034
 
-### Step 2b: Add Trace Mode to the ISS
+Passed: 23 / 23
+```
 
-Add a debug function to `rv32_dpi.c` that enables instruction tracing:
+---
 
+## 6. Changes Made
+
+### File: `dpi-riscv/sim/iss/rv32_dpi.c`
+
+**Fix #1 — `rv_step()`** (lines ~908-912):
 ```c
-// Near the top of execute_compressed():
-#ifdef TRACE
-static void trace_insn(uint32_t pc, const char *name, uint32_t insn) {
-    static int count = 0;
-    printf("TRACE[%d] PC=0x%08X  insn=0x%04X  (%s)\n", count++, pc, insn, name);
+// Before (BUG):
+pc += 2;  // always advances after any compressed insn
+
+// After (FIX):
+if (pc == pc_before) {
+    pc += 2;  // only advance if pc wasn't changed by a jump/branch
 }
-#define TRACE_COMPRESSED(name, insn) trace_insn(pc, name, insn)
-#define TRACE_32(name, insn)         trace_insn(pc, name, insn)
-#else
-#define TRACE_COMPRESSED(name, insn)
-#define TRACE_32(name, insn)
-#endif
 ```
 
-Insert `TRACE_COMPRESSED("C.J", c_insn)` in the C.J case, and similar markers for each compressed instruction type.
+**Fix #2 — `execute_compressed()` C.LWSP case** (lines ~412-413):
+```c
+// Before (WRONG):
+uint32_t offset = ((insn >> 2) & 0x1fu) << 2;
 
-### Step 2c: Build with Trace and Run Single Test
-
-```bash
-g++ -DTRACE -I./sim/iss -I. -o rv32_dpi_riscv_tests_trace \
-    sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c
-
-# Run only the rvc test
-./rv32_dpi_riscv_tests_trace /path/to/riscv-tests/isa/bin/ | head -200
+// After (CORRECT):
+uint32_t offset = ((insn >> 5) & 0x3u) << 6 |   // imm[7:6] = insn[6:5]
+                  ((insn >> 12) & 0x1u) << 5 |  // imm[5] = insn[12]
+                  ((insn >> 2) & 0x7u) << 2;    // imm[4:2] = insn[4:2]
 ```
-
-From the trace, look for:
-- Where execution goes after the `li ra, 0` instruction
-- Whether `c.j` jumps to the correct target
-- Whether the stale-PC detection fires prematurely
-
-### Step 2d: Cross-Check Bit Assembly
-
-If the trace shows the C.J offset is wrong, compare the decoder in `rv32_dpi.c` (lines 350-362) against the RISC-V specification:
-
-| Offset bit | C.J encoding                 | Current code                                            |
-|------------|------------------------------|----------------------------------------------------------|
-| 0          | 0 (implicit)                 | 0 (implicit)                                             |
-| 1          | insn[3]                      | `((insn >> 3) & 0x7u) << 1` → bit [3:1] holds offset[3:1] |
-| 2          | insn[4]                      | (same)                                                   |
-| 3          | insn[5]                      | (same)                                                   |
-| 4          | insn[11]                     | `((insn >> 11) & 0x1u) << 4`                             |
-| 5          | insn[2]                      | `((insn >> 2) & 0x1u) << 5`                              |
-| 6          | insn[7]                      | `((insn >> 7) & 0x1u) << 6`                              |
-| 7          | insn[6]                      | `((insn >> 6) & 0x1u) << 7`                              |
-| 8          | insn[9] + insn[10]           | `((insn >> 9) & 0x3u) << 8`                              |
-| 9          | insn[10]                     | (same)                                                   |
-| 10         | insn[8]                      | `((insn >> 8) & 0x1u) << 10`                             |
-| 11         | insn[12] (sign)              | `((insn >> 12) & 0x1u) << 11`                            |
-
-This looks correct, but verify with actual opcodes from Step 2a.
-
-### Step 2e: Check for a Simpler Root Cause
-
-If the C.J encoding is correct, the problem might be:
-1. **Stale-PC detection** triggering too early (if the `c.j 1f` at `1:` creates a tight loop that gets flagged as "stale")
-2. **A previous test case corrupting state** (e.g., `li sp, 0x1234` from test 3 affecting the stack)
-3. **C.JAL from test case 37 leaving something on the stack that affects C.J**
-
-Check the instruction count: the test runs 180 instructions (from the test output), which is well under the 50000-instruction limit, so it's not a timeout issue.
-
----
-
-## 3. Resolution Path
-
-| Root Cause Found | Fix |
-|---|---|
-| **C.J offset wrong** | Correct the bit encoding in `execute_compressed()` case 0x5 |
-| **Previous test corrupts state** | Add `rv_reset()`-style register clearing between tests, or fix the specific corrupting instruction |
-| **Stale-PC false positive** | Increase `MAX_STALE_CHECKS` or add PC-change tracking that handles intentional loops |
-| **C.JAL overlaps with C.J decoding** | Verify that case 0x1 (funct3=1) for C.JAL doesn't interfere with case 0x5 (funct3=5) for C.J |
-
----
-
-## 4. Post-Fix Validation
-
-After fixing, run the full suite:
-
-```bash
-make clean && make rv32_dpi_riscv_tests && ./rv32_dpi_riscv_tests
-```
-
-Expected: 48/48 PASS, 0 FAIL, 0 SKIP.
-
-Then update `isa_support.md` with the final results.
