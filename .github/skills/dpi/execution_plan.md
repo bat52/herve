@@ -3,7 +3,6 @@
 > **Generated:** 2026-04-26
 > **Purpose:** Step-by-step implementation guide for building features described in `dpi.md`
 > **Status:** Core ISS complete (RV32I + M + C + CSR + IRQ); AHB BFM, IRQ examples, ISA validation runner all done; docs/performance tuning remaining; cross-simulator verification strategy defined
-> **Last updated:** 2026-04-30 — Phase 8 added: cross-simulator verification (Icarus, ModelSim, four-tier strategy)
 
 ---
 
@@ -867,6 +866,100 @@ run_fast: obj_dir/V$(TOP)
 run_debug: obj_dir/V$(TOP)
     ./obj_dir/V$(TOP) --trace  # full VCD dump
 ```
+
+
+### 7.4 Benchmark Firmware Performance Comparison (ibex vs herve)
+
+**Goal:** Quantify the simulation speed difference between running a benchmark firmware on the **ibex** RISC-V core (an RTL DUT, cycle-accurate) versus the same firmware on **herve** (the ISS via Verilator DPI co-simulation). This comparison validates the core value proposition of ISS-based co-simulation: dramatically faster firmware simulation by skipping RTL cycle-by-cycle signal propagation.
+
+#### 7.4.1 Benchmark Selection
+
+Choose a computationally intensive firmware that exercises the instruction set without extensive MMIO interaction (to avoid DPI crossing overhead dominating):
+
+| Benchmark | Source | Size | Notes |
+|-----------|--------|------|-------|
+| **dhrystone** | `riscv-tests/benchmarks/dhrystone/` | ~2 KB | Classic CPU performance benchmark, minimal I/O |
+| **median** | `riscv-tests/benchmarks/median/` | ~1 KB | Data processing, good mix of load/store/ALU |
+| **qsort** | `riscv-tests/benchmarks/qsort/` | ~3 KB | Sorting algorithm, branch-heavy |
+| **mm** | `riscv-tests/benchmarks/mm/` | ~2 KB | Matrix multiply, ALU-heavy |
+
+**Recommended:** dhrystone, as it is the most widely cited embedded benchmark and provides a natural point of comparison with published results.
+
+#### 7.4.2 herve Setup (ISS DPI Co-Simulation)
+
+1. Cross-compile the benchmark for RV32IMC: `riscv64-unknown-elf-gcc -march=rv32imc -O2 -nostdlib ...`
+2. Load the firmware binary into the ISS using `rv_init()`.
+3. Run with Verilator DPI co-simulation using the existing `run_fast` Makefile target (no waveform dumping).
+4. Record:
+   - Total wall-clock time (`clock_gettime` or `perf stat`)
+   - Total simulated instructions executed (`rv_step` return value accumulator)
+   - Total simulation cycles (Verilator `eval()` count)
+
+#### 7.4.3 ibex Setup (RTL DUT)
+
+1. Obtain the [ibex core](https://github.com/lowRISC/ibex) RTL.
+2. Create a minimal Verilator testbench that:
+   - Instantiates the ibex core.
+   - Connects a simple RAM model for firmware and data.
+   - Loads the same benchmark firmware binary into RAM.
+   - Drives the clock and runs until the benchmark completes (e.g., detects a write to a magic "finish" MMIO address).
+3. Build and run with Verilator, **without waveform dumping** (for fair performance comparison).
+4. Record:
+   - Total wall-clock time.
+   - Total simulated cycles.
+   - Instructons retired (if ibex's internal counters are accessible).
+
+#### 7.4.4 Measurement Methodology
+
+Use the same measurement technique for both setups:
+
+```bash
+# Wall-clock timing with perf stat (Linux)
+perf stat -e cycles:u,instructions:u \
+    ./obj_dir/Vdut --no-trace 2>&1 | tee perf_results.log
+```
+
+For finer-grained internal timing, instrument the testbench:
+
+```cpp
+#include <chrono>
+
+auto start = std::chrono::steady_clock::now();
+// ... simulation loop ...
+auto end = std::chrono::steady_clock::now();
+double seconds = std::chrono::duration<double>(end - start).count();
+double ips = total_instructions / seconds;         // instructions per second
+double sim_ips = total_cycles / seconds;            // simulation cycles per second
+double ipc = (double)total_instructions / total_cycles; // simulated IPC
+```
+
+**Important controls:**
+- Both runs should use the same host machine (CPU, RAM, OS).
+- Both runs should use the same Verilator version and optimization flags.
+- Both runs should be repeated 3-5 times and the median recorded.
+- Waveform dumping must be disabled in both runs.
+
+#### 7.4.5 Performance Results Template
+
+| Metric | ibex (RTL) | herve (ISS DPI) | Speed-up |
+|--------|-----------|-----------------|----------|
+| Wall-clock time (s) | `T_ibex` | `T_herve` | `T_ibex / T_herve` × |
+| Simulated instructions | `I_ibex` | `I_herve` | — |
+| Simulated cycles | `C_ibex` | `C_herve` | — |
+| Instructions/second | `I_ibex / T_ibex` | `I_herve / T_herve` | — |
+| Simulated cycles/second | `C_ibex / T_ibex` | `C_herve / T_herve` | — |
+
+#### 7.4.6 Expected Results & Analysis
+
+| Factor | herve Advantage | Rationale |
+|--------|----------------|-----------|
+| **Pipeline modeling** | None (no pipeline) | ISS executes one instruction per call; no hazard detection, forwarding, or stall logic. |
+| **Signal propagation** | None (pure C) | No RTL signal toggling per cycle (HCLK, HADDR, HWDATA, etc.). |
+| **Memory access** | Direct pointer dereference | Shared RAM array (`rv_get_ram()`) avoids bus protocol handshaking. |
+| **Context switching** | ~10× fewer eval() calls | ISS runs WFI-free in batches of 1000+ instructions per `rv_step()`. |
+| **Overall** | **10× – 100×** | Most significant for compute-bound firmware with infrequent MMIO. |
+
+Document the actual ratio once measured, along with any unexpected results (e.g., if MMIO-bound firmware closes the gap).
 
 ---
 
