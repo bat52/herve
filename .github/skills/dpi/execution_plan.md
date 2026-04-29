@@ -896,8 +896,9 @@ Phase 7 (Performance tuning — can iterate alongside any phase)
 ### Remaining Work
 
 1. **Performance tuning** — Batch size optimization, DPI crossing minimization (write merging), waveform strategy. Phase 7 provides detailed implementation guidance above.
-2. **Doc refresh** — Update `arch.md` and `integration.md` with current MMIO address ranges.
+2. ~~**Doc refresh** — Update `arch.md` and `integration.md` with current MMIO address ranges.~~ ✅ **Done — MMIO range updated to `0x1000_0000` – `0x100F_FFFF` with GPIO register map**
 3. ~~**Run and capture ISA validation results** — Execute `make run_riscv_tests` and update `isa_support.md` checkboxes with actual pass/fail.~~ ✅ **Done — 48/48 tests pass (40 RV32I + 7 RV32M + 1 RV32C)**
+
 
 
 ---
@@ -928,9 +929,10 @@ Phase 7 (Performance tuning — can iterate alongside any phase)
 
 | File | Changes Needed |
 |------|----------------|
-| `dpi-riscv/docs/arch.md` | Update MMIO address range and architecture description to reflect current implementation |
-| `dpi-riscv/docs/integration.md` | Update MMIO address range and integration steps |
+| ~~`dpi-riscv/docs/arch.md`~~ | ~~Update MMIO address range and architecture description to reflect current implementation~~ ✅ **Done** |
+| ~~`dpi-riscv/docs/integration.md`~~ | ~~Update MMIO address range and integration steps~~ ✅ **Done** |
 | ~~`dpi-riscv/docs/isa_support.md`~~ | ~~Run `make run_riscv_tests` and update checkboxes with actual pass/fail results~~ ✅ **Done** |
+
 
 
 ---
