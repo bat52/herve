@@ -1,17 +1,19 @@
 /**
- * Verilator test harness for AHB-Lite GPIO DUT.
+ * Verilator test harness for AHB-Lite GPIO DUT with IRQ self-test.
  *
- * This harness demonstrates the full AHB-Lite bus transaction path:
+ * This harness demonstrates the full IRQ injection path through the GPIO:
  *   1. Load AHB firmware into ISS
- *   2. Run firmware — it performs MMIO reads/writes through the AHB bus
- *   3. Each MMIO access triggers dpi_mmio_read/dpi_mmio_write in C++
- *   4. C++ drives the AHB BFM request interface and ticks the clock
- *   5. After firmware completes, verify DUT register state matches expectations
+ *   2. Run firmware — it configures interrupts, writes GPIO_OUT=1
+ *   3. gpio_out[0] drives ext_irq in Verilog (a Verilog process)
+ *   4. Verilog always block calls rv_set_irq(1) on posedge clk
+ *   5. Next rv_step() — ISS vectors to interrupt handler
+ *   6. Handler reads GPIO_STATUS, clears GPIO_OUT, mret
+ *   7. Firmware detects GPIO_OUT==0, writes pass indicator
  *
  * Signal ownership:
  *   clk    - C++ testbench (this file)
  *   rstn   - C++ testbench (this file)
- *   ext_irq - C++ testbench (this file)
+ *   ext_irq - Verilog process (driven from gpio_out[0] via continuous assignment)
  *
  * The BFM request interface is exposed as top-level ports on tb_top_ahb:
  *   tb->ahb_req_valid
@@ -21,13 +23,12 @@
  *   tb->ahb_req_ready
  *   tb->ahb_req_rdata
  *
- * The DUT registers are accessed through the Verilator model rootp:
- *   tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_out
- *   tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_ie
+ * DUT register state is read through the exposed module outputs:
+ *   tb->gpio_out
+ *   tb->gpio_ie
  */
 
 #include "Vtb_top_ahb.h"
-#include "Vtb_top_ahb___024root.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 #include "rv32_dpi.h"
@@ -112,8 +113,6 @@ extern "C" int dpi_mmio_read(int addr) {
     }
 
     uint32_t rdata = 0;
-    // Use a local tfp pointer — we need to pass nullptr since we don't
-    // have access to the tfp from here. The VCD dump will happen in main().
     ahb_transaction((uint32_t)addr, false, 0, &rdata, nullptr);
     return (int)rdata;
 }
@@ -162,7 +161,7 @@ int main(int argc, char **argv) {
         i++;
     }
 
-    printf("=== RISC-V DPI AHB-Lite GPIO Test Harness ===\n");
+    printf("=== RISC-V DPI AHB-Lite GPIO IRQ Self-Test ===\n");
     printf("Firmware: %s\n", firmware_path);
     printf("Step batch: %d\n", step_batch);
 
@@ -184,7 +183,7 @@ int main(int argc, char **argv) {
     // Initialise all signals
     tb->clk = 0;
     tb->rstn = 0;  // active-low reset asserted
-    tb->ext_irq = 0;
+    // Note: ext_irq is now driven from Verilog (gpio_out[0]), not from C++
 
     // Initialise BFM request interface (top-level ports)
     tb->ahb_req_valid = 0;
@@ -208,42 +207,73 @@ int main(int argc, char **argv) {
         tick(tfp);
     }
 
-    // ---- Execute firmware ----
-    printf("\n--- Executing firmware ---\n");
+    // ---- Phase 1: Execute firmware boot (mtvec, MIE, IE, GPIO_OUT=1) ----
+    printf("\n--- Phase 1: Boot firmware (configure interrupts, write GPIO_OUT=1) ---\n");
     int executed = rv_step(step_batch);
     printf("rv_step: executed %d instructions\n", executed);
-    printf("PC after execution: 0x%08x\n", rv_get_pc());
+    printf("PC after boot: 0x%08x\n", rv_get_pc());
+    printf("GPIO_OUT = 0x%08x\n", tb->gpio_out);
+    printf("GPIO_IE  = 0x%08x\n", tb->gpio_ie);
 
-    // ---- Tick the RTL clock a few more edges ----
-    for (int i = 0; i < 10; ++i) {
+    // Tick the RTL clock a few edges to let SV DPI settle
+    for (int i = 0; i < 4; ++i) {
         tick(tfp);
     }
 
+    // ---- Phase 2: Run ISS — should vector to interrupt handler ----
+    printf("\n--- Phase 2: Execute ISS (vectors to handler at mtvec = 0x100) ---\n");
+    executed = rv_step(step_batch);
+    printf("rv_step: executed %d instructions (IRQ vectoring)\n", executed);
+    printf("PC after vectoring: 0x%08x\n", rv_get_pc());
+
+    // Tick the RTL clock a few edges
+    for (int i = 0; i < 4; ++i) {
+        tick(tfp);
+    }
+
+    // ---- Phase 3: Run ISS again — handler reads GPIO_STATUS, clears GPIO_OUT, mret ----
+    printf("\n--- Phase 3: Execute ISS (handler runs: read STATUS, clear GPIO_OUT, mret) ---\n");
+    executed = rv_step(step_batch);
+    printf("rv_step: executed %d instructions (handler execution)\n", executed);
+    printf("PC after handler: 0x%08x\n", rv_get_pc());
+    printf("GPIO_OUT = 0x%08x\n", tb->gpio_out);
+
+    // Tick the RTL clock a few edges
+    for (int i = 0; i < 4; ++i) {
+        tick(tfp);
+    }
+
+    // ---- Phase 4: Run ISS again — post-handler: write pass indicator ----
+    printf("\n--- Phase 4: Execute ISS (post-handler, write pass indicator) ---\n");
+    executed = rv_step(step_batch);
+    printf("rv_step: executed %d instructions (post-handler)\n", executed);
+    printf("PC after post-handler step: 0x%08x\n", rv_get_pc());
+
     // ---- Print DUT register state ----
     printf("\n--- AHB GPIO DUT Register State ---\n");
-    printf("  GPIO_OUT    = 0x%08x\n", tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_out);
-    printf("  GPIO_IE     = 0x%08x\n", tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_ie);
+    printf("  GPIO_OUT    = 0x%08x\n", tb->gpio_out);
+    printf("  GPIO_IE     = 0x%08x\n", tb->gpio_ie);
     printf("  Pass/Fail   = 0x%08x\n", dpi_mmio_read_last_indicator);
 
     // ---- Verify expected values ----
     bool pass = true;
 
-    // After firmware:
-    //   GPIO_OUT should be 0 (cleared in step 6)
-    //   GPIO_IE should be 1 (set in step 2)
+    // After the test:
+    //   GPIO_OUT should be 0 (cleared by interrupt handler)
+    //   GPIO_IE should be 1 (set during boot, not touched by handler)
     //   Pass/Fail indicator should be 1 (success)
 
-    if (tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_out == 0) {
-        printf("\n[PASS] GPIO_OUT = 0x00000000 (cleared by firmware)\n");
+    if (tb->gpio_out == 0) {
+        printf("\n[PASS] GPIO_OUT = 0x00000000 (cleared by interrupt handler)\n");
     } else {
-        printf("\n[FAIL] GPIO_OUT = 0x%08x (expected 0x00000000)\n", tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_out);
+        printf("\n[FAIL] GPIO_OUT = 0x%08x (expected 0x00000000)\n", tb->gpio_out);
         pass = false;
     }
 
-    if (tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_ie == 1) {
-        printf("[PASS] GPIO_IE  = 0x00000001 (set by firmware)\n");
+    if (tb->gpio_ie == 1) {
+        printf("[PASS] GPIO_IE  = 0x00000001 (unchanged)\n");
     } else {
-        printf("[FAIL] GPIO_IE  = 0x%08x (expected 0x00000001)\n", tb->rootp->tb_top_ahb__DOT__dut_gpio__DOT__gpio_ie);
+        printf("[FAIL] GPIO_IE  = 0x%08x (expected 0x00000001)\n", tb->gpio_ie);
         pass = false;
     }
 

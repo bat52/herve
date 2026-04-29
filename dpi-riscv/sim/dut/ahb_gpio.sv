@@ -6,7 +6,7 @@
  *
  *   Offset  | Name         | Width | Access | Description
  *   --------|--------------|-------|--------|---------------------------
- *   0x00    | GPIO_OUT     | 32    | R/W    | Output value (bit 0 = LED)
+ *   0x00    | GPIO_OUT     | 32    | R/W    | Output value (bit 0 = LED / IRQ)
  *   0x04    | GPIO_IE      | 32    | R/W    | Interrupt enable
  *   0x08    | GPIO_STATUS  | 32    | R      | Interrupt status (bit 0 = pending)
  *   0x0C    | GPIO_RESERVED| 32    | R      | Reserved (reads 0)
@@ -30,12 +30,15 @@ module ahb_gpio (
     output reg         HREADY,
     output reg  [31:0] HRDATA,
     // External interrupt line (driven by testbench)
-    input  wire        ext_irq
+    input  wire        ext_irq,
+    // Exposed register outputs (for testbench observability / IRQ routing)
+    output wire [31:0] gpio_out,
+    output wire [31:0] gpio_ie
 );
 
     // Register storage
-    reg [31:0] gpio_out;
-    reg [31:0] gpio_ie;
+    reg [31:0] gpio_out_reg;
+    reg [31:0] gpio_ie_reg;
 
     // Internal signals
     wire        access_valid;
@@ -43,6 +46,10 @@ module ahb_gpio (
 
     assign access_valid = HSEL && (HTRANS == 2'b10 || HTRANS == 2'b11);
     assign byte_offset  = HADDR[3:0];
+
+    // Expose register values as outputs
+    assign gpio_out = gpio_out_reg;
+    assign gpio_ie  = gpio_ie_reg;
 
     // Always ready (combinational — single-cycle response)
     always @(*) begin
@@ -53,8 +60,8 @@ module ahb_gpio (
     always @(*) begin
         if (HSEL && !HWRITE && (HTRANS == 2'b10 || HTRANS == 2'b11)) begin
             case (byte_offset)
-                4'h0: HRDATA = gpio_out;
-                4'h4: HRDATA = gpio_ie;
+                4'h0: HRDATA = gpio_out_reg;
+                4'h4: HRDATA = gpio_ie_reg;
                 4'h8: HRDATA = {31'h0, ext_irq};  // GPIO_STATUS = ext_irq
                 default: HRDATA = 32'h0;
             endcase
@@ -66,12 +73,12 @@ module ahb_gpio (
     // Write: sequential (on posedge HCLK)
     always @(posedge HCLK or negedge HRESETn) begin
         if (!HRESETn) begin
-            gpio_out <= 32'h0;
-            gpio_ie  <= 32'h0;
+            gpio_out_reg <= 32'h0;
+            gpio_ie_reg  <= 32'h0;
         end else if (access_valid && HWRITE) begin
             case (byte_offset)
-                4'h0: gpio_out <= HWDATA;
-                4'h4: gpio_ie  <= HWDATA;
+                4'h0: gpio_out_reg <= HWDATA;
+                4'h4: gpio_ie_reg  <= HWDATA;
                 default: begin end // writes to STATUS or reserved are ignored
             endcase
         end

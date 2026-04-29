@@ -10,12 +10,16 @@
  *
  * The C++ testbench drives clk and rstn, and the ISS calls
  * dpi_mmio_read/dpi_mmio_write which drive the BFM and tick the clock.
+ *
+ * Interrupt signal ext_irq is generated in Verilog from gpio_out[0],
+ * emulating a real peripheral assertion of the interrupt line.
+ * On each posedge clk, the DPI function rv_set_irq() is called to
+ * propagate the IRQ to the ISS.
  */
 
 module tb_top_ahb (
     input  wire        clk,
     input  wire        rstn,
-    input  wire        ext_irq,
     // BFM request interface (driven from C++ harness)
     input  wire        ahb_req_valid,
     input  wire [31:0] ahb_req_addr,
@@ -24,6 +28,9 @@ module tb_top_ahb (
     output wire        ahb_req_ready,
     output wire [31:0] ahb_req_rdata
 );
+
+    // DPI import: C function to set interrupt mask in ISS
+    import "DPI-C" function void rv_set_irq(int mask);
 
     // AHB-Lite interconnect signals
     wire [31:0] haddr;
@@ -34,8 +41,25 @@ module tb_top_ahb (
     wire        hready;
     wire [31:0] hrdata;
 
+    // GPIO signals from DUT
+    wire [31:0] gpio_out;
+    wire [31:0] gpio_ie;
+
     // GPIO slave select (decoded from address)
     wire        hsel_gpio;
+
+    // Interrupt signal: driven by gpio_out[0] (Verilog process)
+    wire        ext_irq;
+
+    assign ext_irq = gpio_out[0];
+
+    // Propagate IRQ to ISS via DPI on every clock edge
+    always @(posedge clk) begin
+        if (ext_irq)
+            rv_set_irq(32'h1);
+        else
+            rv_set_irq(32'h0);
+    end
 
     // Address decoding: GPIO at 0x1000_0000 - 0x1000_000F (4 registers, 16 bytes)
     assign hsel_gpio = (haddr >= 32'h1000_0000 && haddr < 32'h1000_0010);
@@ -71,7 +95,9 @@ module tb_top_ahb (
         .HWDATA(hwdata),
         .HREADY(hready),
         .HRDATA(hrdata),
-        .ext_irq(ext_irq)
+        .ext_irq(ext_irq),
+        .gpio_out(gpio_out),
+        .gpio_ie(gpio_ie)
     );
 
 endmodule
