@@ -2,9 +2,9 @@
 set -e
 
 # ---- Config ----
-REPO_URL="https://github.com/openclaw-ai/openclaw.git"
+REPO_URL="https://github.com/openclaw/openclaw.git"
 INSTALL_DIR="$HOME/openclaw"
-PYTHON_VERSION="3.10"
+PYTHON_VERSION="3.12"
 
 echo "[1/6] Installing system dependencies..."
 sudo apt update
@@ -42,7 +42,7 @@ echo "[6/6] Setup environment variables..."
 cat <<EOF > .env
 # Example config
 OPENCLAW_MODEL=deepseek-coder
-OPENCLAW_API_KEY=your_api_key_here
+OPENCLAW_API_KEY=$DEEPSEEK_API_KEY
 EOF
 
 echo ""
