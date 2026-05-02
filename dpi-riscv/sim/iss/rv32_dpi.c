@@ -937,6 +937,15 @@ void rv_set_irq(uint32_t mask) {
     irq_mask = mask;
 }
 
+void rv_set_ram(void *buf, size_t size) {
+    if (memory != NULL) {
+        free(memory);
+    }
+    memory = (uint8_t *)buf;
+    memory_size = (uint32_t)size;
+    initialized = true;
+}
+
 void *rv_get_ram(void) {
     return memory;
 }

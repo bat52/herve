@@ -49,6 +49,16 @@ void rv_set_irq(uint32_t mask);
 void* rv_get_ram(void);
 
 /**
+ * Set the shared RAM buffer externally.
+ * This allows the caller to provide a pre-allocated buffer (e.g. via mmap)
+ * instead of having rv_init() allocate internally via malloc.
+ * Must be called BEFORE rv_init() or rv_init_from_buffer().
+ * @param buf Pointer to the RAM buffer.
+ * @param size Size of the RAM buffer in bytes.
+ */
+void rv_set_ram(void *buf, size_t size);
+
+/**
  * Get current Program Counter.
  */
 uint32_t rv_get_pc(void);

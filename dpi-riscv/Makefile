@@ -43,7 +43,7 @@ DUT_SV       = sim/dut/ahb_gpio.sv
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb run_benchmark run_spike_benchmark compare_benchmark
 
 all: run
 
@@ -238,7 +238,26 @@ rv32_dpi_riscv_tests: sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c
 run_riscv_tests: rv32_dpi_riscv_tests
 	./rv32_dpi_riscv_tests
 
+# ---- Benchmark: Herve ISS vs Spike comparison ----
+rv32_dpi_benchmark: sim/iss/rv32_dpi_benchmark.cpp sim/iss/rv32_dpi.c
+	g++ -std=c++11 -I./sim/iss -I. -O2 -o $@ sim/iss/rv32_dpi_benchmark.cpp sim/iss/rv32_dpi.c
+
+run_benchmark: rv32_dpi_benchmark
+	./rv32_dpi_benchmark
+
+run_benchmark_csv: rv32_dpi_benchmark
+	./rv32_dpi_benchmark --csv
+
+run_spike_benchmark:
+	bash tests/run_spike_benchmark.sh
+
+run_spike_benchmark_csv:
+	bash tests/run_spike_benchmark.sh --csv
+
+compare_benchmark: rv32_dpi_benchmark
+	python3 tests/analyze_benchmark.py
+
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv
 
 
