@@ -16,6 +16,22 @@ extern "C" {
 void rv_init(const char *firmware, size_t ram_size);
 
 /**
+ * Initialize the emulator from an ELF executable file.
+ *
+ * Parses the ELF header and program headers to load PT_LOAD segments
+ * at their correct virtual addresses, then returns the entry point.
+ * Supports 32-bit little-endian RISC-V ELF files (EM_RISCV = 0xF3).
+ *
+ * This enables Herve to run binaries compiled for Spike directly,
+ * without needing an intermediate objcopy -O binary conversion step.
+ *
+ * @param elf_path Path to the ELF executable file.
+ * @param ram_size Size of the shared RAM in bytes (must cover all segments).
+ * @return Entry point address (e_entry from ELF header), or 0 on failure.
+ */
+uint32_t rv_init_elf(const char *elf_path, size_t ram_size);
+
+/**
  * Initialize the emulator from an in-memory buffer.
  * Useful when firmware is embedded in the testbench binary.
  * @param data Pointer to firmware binary data (NULL = no firmware).

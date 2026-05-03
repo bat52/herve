@@ -855,6 +855,196 @@ static bool execute_instruction(uint32_t insn) {
     return true;
 }
 
+/*
+ * Minimal ELF structures for 32-bit RISC-V.
+ * Defined inline to avoid any external dependency on libelf or <elf.h>.
+ */
+#define EI_NIDENT 16
+
+/* ELF header (32-bit) */
+struct elf32_ehdr {
+    unsigned char e_ident[EI_NIDENT]; /* ELF identification */
+    uint16_t      e_type;             /* Object file type */
+    uint16_t      e_machine;          /* Architecture */
+    uint32_t      e_version;          /* Object file version */
+    uint32_t      e_entry;            /* Entry point virtual address */
+    uint32_t      e_phoff;            /* Program header table file offset */
+    uint32_t      e_shoff;            /* Section header table file offset */
+    uint32_t      e_flags;            /* Processor-specific flags */
+    uint16_t      e_ehsize;           /* ELF header size in bytes */
+    uint16_t      e_phentsize;        /* Program header entry size */
+    uint16_t      e_phnum;            /* Program header entry count */
+    uint16_t      e_shentsize;        /* Section header entry size */
+    uint16_t      e_shnum;            /* Section header entry count */
+    uint16_t      e_shstrndx;         /* Section header string table index */
+};
+
+/* Program header (32-bit) */
+struct elf32_phdr {
+    uint32_t p_type;   /* Segment type */
+    uint32_t p_offset; /* Segment file offset */
+    uint32_t p_vaddr;  /* Segment virtual address */
+    uint32_t p_paddr;  /* Segment physical address */
+    uint32_t p_filesz; /* Segment size in file */
+    uint32_t p_memsz;  /* Segment size in memory */
+    uint32_t p_flags;  /* Segment flags */
+    uint32_t p_align;  /* Segment alignment */
+};
+
+/* ELF magic and constants */
+#define ELFMAG0   0x7f
+#define ELFMAG1   'E'
+#define ELFMAG2   'L'
+#define ELFMAG3   'F'
+#define ELFCLASS32 1   /* 32-bit architecture */
+#define ELFDATA2LSB 1  /* Little-endian */
+#define EM_RISCV   0xF3
+#define PT_LOAD    1   /* Loadable program segment */
+
+uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
+    if (elf_path == NULL || *elf_path == '\0') {
+        return 0;
+    }
+
+    FILE *file = fopen(elf_path, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "rv_init_elf: cannot open '%s'\n", elf_path);
+        return 0;
+    }
+
+    /* Read ELF header */
+    struct elf32_ehdr ehdr;
+    if (fread(&ehdr, sizeof(ehdr), 1, file) != 1) {
+        fprintf(stderr, "rv_init_elf: failed to read ELF header from '%s'\n", elf_path);
+        fclose(file);
+        return 0;
+    }
+
+    /* Validate ELF magic */
+    if (ehdr.e_ident[0] != ELFMAG0 || ehdr.e_ident[1] != ELFMAG1 ||
+        ehdr.e_ident[2] != ELFMAG2 || ehdr.e_ident[3] != ELFMAG3) {
+        fprintf(stderr, "rv_init_elf: '%s' is not an ELF file (bad magic)\n", elf_path);
+        fclose(file);
+        return 0;
+    }
+
+    /* Validate 32-bit, little-endian, RISC-V */
+    if (ehdr.e_ident[4] != ELFCLASS32) {
+        fprintf(stderr, "rv_init_elf: '%s' is not a 32-bit ELF\n", elf_path);
+        fclose(file);
+        return 0;
+    }
+    if (ehdr.e_ident[5] != ELFDATA2LSB) {
+        fprintf(stderr, "rv_init_elf: '%s' is not little-endian\n", elf_path);
+        fclose(file);
+        return 0;
+    }
+    if (ehdr.e_machine != EM_RISCV) {
+        fprintf(stderr, "rv_init_elf: '%s' is not RISC-V (machine=0x%04x)\n",
+                elf_path, ehdr.e_machine);
+        fclose(file);
+        return 0;
+    }
+
+    /* Determine required RAM size from program headers */
+    uint32_t max_addr = 0;
+    for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
+        struct elf32_phdr phdr;
+        if (fseek(file, ehdr.e_phoff + i * ehdr.e_phentsize, SEEK_SET) != 0) {
+            fprintf(stderr, "rv_init_elf: seek to program header %u failed\n", (unsigned)i);
+            fclose(file);
+            return 0;
+        }
+        if (fread(&phdr, sizeof(phdr), 1, file) != 1) {
+            fprintf(stderr, "rv_init_elf: failed to read program header %u\n", (unsigned)i);
+            fclose(file);
+            return 0;
+        }
+        if (phdr.p_type == PT_LOAD) {
+            uint32_t end = phdr.p_vaddr + phdr.p_memsz;
+            if (end > max_addr) {
+                max_addr = end;
+            }
+        }
+    }
+
+    /* Allocate RAM (at least ram_size, but large enough for all segments) */
+    size_t needed = (max_addr > (uint32_t)ram_size) ? (size_t)max_addr : ram_size;
+    if (needed < 1) {
+        needed = 1 << 20; /* default 1 MB */
+    }
+
+    /* Free any existing memory */
+    if (memory != NULL) {
+        free(memory);
+        memory = NULL;
+    }
+
+    memory = (uint8_t *)malloc(needed);
+    if (memory == NULL) {
+        memory_size = 0;
+        initialized = false;
+        fclose(file);
+        return 0;
+    }
+
+    memory_size = (uint32_t)needed;
+    memset(memory, 0, memory_size);
+    memset(regs, 0, sizeof(regs));
+    pc = 0;
+    irq_mask = 0;
+    initialized = true;
+
+    /* Load each PT_LOAD segment */
+    for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
+        struct elf32_phdr phdr;
+        if (fseek(file, ehdr.e_phoff + i * ehdr.e_phentsize, SEEK_SET) != 0) {
+            continue;
+        }
+        if (fread(&phdr, sizeof(phdr), 1, file) != 1) {
+            continue;
+        }
+        if (phdr.p_type != PT_LOAD) {
+            continue;
+        }
+
+        /* Check that segment fits in allocated RAM */
+        uint32_t end = phdr.p_vaddr + phdr.p_memsz;
+        if (end > memory_size) {
+            fprintf(stderr, "rv_init_elf: segment %u (vaddr=0x%08x, memsz=%u) "
+                    "exceeds RAM size (0x%08x)\n",
+                    (unsigned)i, phdr.p_vaddr, phdr.p_memsz, memory_size);
+            continue;
+        }
+
+        /* Read segment data from file */
+        if (phdr.p_filesz > 0) {
+            if (fseek(file, phdr.p_offset, SEEK_SET) != 0) {
+                fprintf(stderr, "rv_init_elf: seek to segment %u data failed\n", (unsigned)i);
+                continue;
+            }
+            size_t read_size = fread(&memory[phdr.p_vaddr], 1, phdr.p_filesz, file);
+            (void)read_size;
+        }
+
+        /* Zero-fill BSS (p_memsz > p_filesz) */
+        if (phdr.p_memsz > phdr.p_filesz) {
+            memset(&memory[phdr.p_vaddr + phdr.p_filesz], 0,
+                   phdr.p_memsz - phdr.p_filesz);
+        }
+    }
+
+    fclose(file);
+
+    /* Set PC to entry point */
+    pc = ehdr.e_entry;
+
+    printf("rv_init_elf: loaded '%s' (entry=0x%08x, ram=%u bytes)\n",
+           elf_path, ehdr.e_entry, memory_size);
+
+    return ehdr.e_entry;
+}
+
 void rv_init(const char *firmware, size_t ram_size) {
     if (memory != NULL) {
         free(memory);
