@@ -6,6 +6,39 @@
 #include <stdio.h>
 
 /*
+ * Debug tracing — enabled by setting the TRACE_INSNS environment variable.
+ * When set, each instruction is logged with PC, encoding, decoded fields,
+ * source register values, and the destination register result.
+ */
+static int trace_enabled = -1; /* -1 = uninitialized, 0 = off, 1 = on */
+static const char * const reg_names[32] = {
+    "zero", "ra", "sp",  "gp",  "tp",  "t0", "t1", "t2",
+    "s0",   "s1", "a0",  "a1",  "a2",  "a3", "a4", "a5",
+    "a6",   "a7", "s2",  "s3",  "s4",  "s5", "s6", "s7",
+    "s8",   "s9", "s10", "s11", "t3",  "t4", "t5", "t6"
+};
+
+static inline int is_trace_enabled(void) {
+    if (trace_enabled == -1) {
+        trace_enabled = (getenv("TRACE_INSNS") != NULL) ? 1 : 0;
+    }
+    return trace_enabled;
+}
+
+static inline void trace_insn(uint32_t pc, uint32_t insn, const char *mnemonic,
+                               uint32_t rd, uint32_t rd_val,
+                               uint32_t rs1, uint32_t rs1_val,
+                               uint32_t rs2, uint32_t rs2_val) {
+    if (!is_trace_enabled()) return;
+    fprintf(stderr, "PC=0x%08x  insn=0x%08x  %s  rd=%s(%u)=0x%08x"
+                    "  rs1=%s(%u)=0x%08x  rs2=%s(%u)=0x%08x\n",
+            pc, insn, mnemonic,
+            reg_names[rd], rd, rd_val,
+            reg_names[rs1], rs1, rs1_val,
+            reg_names[rs2], rs2, rs2_val);
+}
+
+/*
  * Dependency Policy:
  * This file must compile with only standard C headers available
  * in Verilator's DPI compilation environment.
@@ -575,7 +608,11 @@ static bool execute_instruction(uint32_t insn) {
             imm = sign_extend((insn >> 20), 12);
             switch (funct3) {
                 case 0x0:
-                    write_reg(rd, src1 + imm);
+                    {
+                        uint32_t addi_result = src1 + imm;
+                        write_reg(rd, addi_result);
+                        trace_insn(pc, insn, "ADDI", rd, addi_result, rs1, src1, 0, imm);
+                    }
                     break;
                 case 0x2:
                     write_reg(rd, (int32_t)src1 < (int32_t)imm ? 1 : 0);
@@ -587,10 +624,18 @@ static bool execute_instruction(uint32_t insn) {
                     write_reg(rd, src1 ^ imm);
                     break;
                 case 0x6:
-                    write_reg(rd, src1 | imm);
+                    {
+                        uint32_t ori_result = src1 | imm;
+                        write_reg(rd, ori_result);
+                        trace_insn(pc, insn, "ORI", rd, ori_result, rs1, src1, 0, imm);
+                    }
                     break;
                 case 0x7:
-                    write_reg(rd, src1 & imm);
+                    {
+                        uint32_t andi_result = src1 & imm;
+                        write_reg(rd, andi_result);
+                        trace_insn(pc, insn, "ANDI", rd, andi_result, rs1, src1, 0, imm);
+                    }
                     break;
                 case 0x1:
                     if (((insn >> 25) == 0x00)) {
@@ -599,9 +644,15 @@ static bool execute_instruction(uint32_t insn) {
                     break;
                 case 0x5:
                     if ((insn >> 25) == 0x00) {
-                        write_reg(rd, src1 >> (insn >> 20));
+                        uint32_t shamt = (insn >> 20) & 0x1f;
+                        uint32_t result = src1 >> shamt;
+                        write_reg(rd, result);
+                        trace_insn(pc, insn, "SRLI", rd, result, rs1, src1, 0, shamt);
                     } else if ((insn >> 25) == 0x20) {
-                        write_reg(rd, (uint32_t)((int32_t)src1 >> (insn >> 20)));
+                        uint32_t shamt = (insn >> 20) & 0x1f;
+                        uint32_t result = (uint32_t)((int32_t)src1 >> shamt);
+                        write_reg(rd, result);
+                        trace_insn(pc, insn, "SRAI", rd, result, rs1, src1, 0, shamt);
                     }
                     break;
                 default:
@@ -703,7 +754,11 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x37: // LUI
-            write_reg(rd, insn & 0xfffff000u);
+            {
+                uint32_t lui_val = insn & 0xfffff000u;
+                write_reg(rd, lui_val);
+                trace_insn(pc, insn, "LUI", rd, lui_val, 0, 0, 0, 0);
+            }
             break;
         case 0x17: // AUIPC
             write_reg(rd, pc + (insn & 0xfffff000u));

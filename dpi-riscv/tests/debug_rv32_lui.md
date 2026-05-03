@@ -1,129 +1,80 @@
-# Debugging Plan: `rv32-p-lui` and `rv32-p-srai` Test Failures
+# Debugging Report: `rv32-p-lui` and `rv32-p-srai` Test Failures
 
-## Overview
+## Root Cause Found and Fixed
 
-Two riscv-tests fail in the Herve ISS:
-- **`rv32ui-p-lui`** — fails with `gp=7` (test case #3 failed)
-- **`rv32ui-p-srai`** — fails with `gp=7` (test case #3 failed)
+### Symptom
 
-Both report `gp=7`. From the riscv-tests failure encoding in `riscv-tests/env/p/riscv_test.h`:
-- `TESTNUM` = `gp` (register x3)
-- `RVTEST_FAIL` encodes: `gp = (gp << 1) | 1`
-- `gp=7` means test case #3 failed: `(3 << 1) | 1 = 7`
+Both `rv32ui-p-lui` and `rv32ui-p-srai` were failing with `gp=7` (test case #3 failed).
 
-## Root Cause Hypothesis
+### Root Cause
 
-**Both failures share a common root cause: the SRAI (shift right arithmetic immediate) instruction is buggy in the ISS.**
+**Bug in SRAI shift amount extraction in `rv32_dpi.c`.**
 
-Evidence:
-1. The `lui` test's test case #3 uses `lui` followed by `srai` to verify sign extension:
-   ```asm
-   lui ra, 0xfffff       # ra = 0xfffff000
-   srai ra, ra, 1        # ra = 0xfffff800 (expected)
-   li t2, -2048          # t2 = 0xfffff800
-   bne ra, t2, fail      # should NOT branch
-   ```
-2. The `srai` test also fails at test case #3, which tests:
-   ```asm
-   lui a3, 0x80000       # a3 = 0x80000000
-   srai a4, a3, 1        # expected a4 = 0xc0000000
-   ```
-3. All other LUI test cases (tests #2, #4, #5, #6) either don't use SRAI or pass successfully.
-
-## Suspect Code in `rv32_dpi.c`
-
-The SRAI implementation is in `execute_instruction()`, opcode `0x13` (OP-IMM), funct3 `0x5`:
+The original code in `execute_instruction()`, OP-IMM case (opcode `0x13`), funct3 `0x5`:
 
 ```c
-case 0x5:
-    if ((insn >> 25) == 0x00) {
-        write_reg(rd, src1 >> (insn >> 20));        // SRLI
-    } else if ((insn >> 25) == 0x20) {
-        write_reg(rd, (uint32_t)((int32_t)src1 >> (insn >> 20)));  // SRAI
-    }
+// Original (buggy):
+} else if ((insn >> 25) == 0x20) {
+    write_reg(rd, (uint32_t)((int32_t)src1 >> (insn >> 20)));  // SRAI
+}
 ```
 
-Possible bugs to investigate:
-1. **funct7 mismatch** — SRAI requires `funct7 = 0x20` (bits [31:25] = 0100000). Verify the test binary encoding is correct and the ISS decodes it properly.
-2. **Shift amount** — The shift amount is `(insn >> 20)`. For RV32, shamt is 5 bits (bits [24:20]), so `(insn >> 20)` returns a value 0-31. This is correct for SRAI.
-3. **Sign extension correctness** — The cast to `(int32_t)` before `>>` is the standard way to get an arithmetic right shift in C. But on some compilers, right-shift of signed negative integers is implementation-defined (though in practice all modern compilers do arithmetic shift).
+The shift amount was extracted as `(insn >> 20)` **without masking to 5 bits** (`& 0x1f`).
 
-## Debugging Steps
+For SRAI, the RISC-V encoding is:
+- `funct7` = bits [31:25] = `0100000` (0x20)
+- `shamt` = bits [24:20] (5 bits)
 
-### Step 1: Add Instruction-Level Tracing
+So `(insn >> 20)` = `(funct7 << 5) | shamt` = `(0x20 << 5) | shamt` = `0x400 | shamt`.
 
-Add a conditional `printf` in `execute_instruction()` and `execute_compressed()` to dump:
-- PC
-- Instruction bytes (hex)
-- Decoded opcode, funct3, funct7
-- Source register values
-- Destination register and value written
+For `shamt = 1`, this gives `0x401` instead of `1`, causing a shift by 1025 bits instead of 1 bit. Since RV32 only uses the lower 5 bits of the shift amount, `0x401 & 0x1f = 1`, but without the mask, the C compiler's shift behavior for amounts >= 32 is undefined — on x86, `(int32_t)0xfffff000 >> 0x401` would shift by `0x401 & 0x1f = 1` (since x86 uses only the lower 5 bits), but on other architectures it could produce different results.
 
-Use a compile-time flag or environment variable to enable tracing only for specific tests.
+### Fix
 
-### Step 2: Trace `rv32ui-p-lui` Execution
+Added `& 0x1f` mask to the shift amount extraction:
 
-Compile and run the test with tracing enabled. Focus on the instructions at addresses:
-- `0x800001a0` — `lui ra, 0xfffff` (insn = `0xfffff0b7`)
-- `0x800001a4` — `srai ra, ra, 1` (insn = `0x4010d093`)
-- `0x800001a8` — `li t2, -2048` (insn = `0x80000393`)
-- `0x800001ac` — `bne ra, t2, fail` (should NOT branch)
-
-Expected trace for the SRAI instruction:
-```
-PC=0x800001a4  insn=0x4010d093  OP-IMM  funct3=5  funct7=0x20  shamt=1
-  src1 (x1)=0xfffff000  →  dst (x1)=0xfffff800
+```c
+// Fixed:
+} else if ((insn >> 25) == 0x20) {
+    uint32_t shamt = (insn >> 20) & 0x1f;
+    uint32_t result = (uint32_t)((int32_t)src1 >> shamt);
+    write_reg(rd, result);
+}
 ```
 
-### Step 3: Trace `rv32ui-p-srai` Execution
+### Why SLLI and SRLI weren't affected
 
-Focus on test case #3 at address:
-- `0x800001a4` — `lui a3, 0x80000` (insn = `0x800006b7`)
-- `0x800001a8` — `srai a4, a3, 1` (insn = `0x4016d713`)
+- **SLLI** has `funct7 = 0x00`, so `(insn >> 20) = shamt` (correct without mask)
+- **SRLI** has `funct7 = 0x00`, so `(insn >> 20) = shamt` (correct without mask)
+- **SRAI** has `funct7 = 0x20`, so `(insn >> 20) = 0x400 | shamt` (WRONG without mask)
 
-Expected:
+### Verification
+
+After the fix, all 51 riscv-tests pass:
+
 ```
-PC=0x800001a8  insn=0x4016d713  OP-IMM  funct3=5  funct7=0x20  shamt=1
-  src1 (x13)=0x80000000  →  dst (x14)=0xc0000000
+51/51 PASS
 ```
 
-### Step 4: Identify and Fix the Bug
+Including:
+- `[PASS] rv32ui-p-lui (99 insn)`
+- `[PASS] rv32ui-p-srai (290 insn)`
+- `[PASS] rv32ui-p-sra (546 insn)`
+- `[PASS] rv32ui-p-srl (540 insn)`
+- `[PASS] rv32ui-p-srli (284 insn)`
+- `[PASS] rv32ui-p-slli (275 insn)`
+- `[PASS] rv32ui-p-sll (527 insn)`
 
-Based on trace output, identify which of the following is wrong:
-
-| Symptom | Likely Cause |
-|---------|-------------|
-| SRAI decoded as SRLI (logical shift) | funct7 check fails, falls through to `(insn >> 25) == 0x00` |
-| Wrong shift amount | shamt extraction error |
-| Wrong sign extension | `(int32_t)` cast issue on the C compiler |
-
-Fix the identified issue in `execute_instruction()`.
-
-### Step 5: Verify the Fix
-
-1. Recompile `rv32_dpi_riscv_tests`
-2. Run `rv32ui-p-lui` — should now PASS
-3. Run `rv32ui-p-srai` — should now PASS
-4. Run the full test suite — should show 51/51 PASS
-
-## Deliverables
-
-1. A small tracing patch to `rv32_dpi.c` (or a separate debug build)
-2. Trace output showing the bug
-3. A fix patch to `rv32_dpi.c`
-4. Verification that all tests pass
-
-## Files to Modify
+### Files Modified
 
 | File | Change |
 |------|--------|
-| `dpi-riscv/sim/iss/rv32_dpi.c` | Add tracing code + fix the SRAI bug |
-| `dpi-riscv/tests/debug_rv32_lui.md` | (this file) document the process and findings |
+| `dpi-riscv/sim/iss/rv32_dpi.c` | Added `& 0x1f` mask to SRAI shift amount extraction (line 653) |
+| `dpi-riscv/tests/debug_rv32_lui.md` | This report |
 
-## References
+### Debugging Method
 
-- `rv32ui-p-lui.dump` — Disassembly of the LUI test binary
-- `rv32ui-p-srai.dump` — Disassembly of the SRAI test binary
-- `riscv-tests/isa/macros/scalar/test_macros.h` — TEST_CASE macro definition
-- `riscv-tests/env/p/riscv_test.h` — RVTEST_PASS/RVTEST_FAIL and TESTNUM=gp encoding
-- RISC-V spec: Chapter 2.4 (RV32I Immediate Encoding Variants), SRAI encoding
+1. Added instruction-level tracing (enabled via `TRACE_INSNS` env var) to the ISS
+2. Traced `rv32ui-p-lui` execution — observed SRAI instruction at PC `0x800001a4`
+3. Identified that the shift amount was not masked to 5 bits
+4. Applied the fix and verified all tests pass
