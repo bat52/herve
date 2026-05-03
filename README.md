@@ -12,7 +12,7 @@ The name "Herve" is a French person's name that happens to have similar pronunci
 - **Standalone mode** — Run RISC-V programs without any HDL simulator or RISC-V toolchain
 - **AHB-Lite GPIO testcase** — Full example of bus-level peripheral integration
 - **Interrupt support** — External interrupt handling via DPI-C
-- **Benchmarked** — 26,419× faster than Spike on riscv-tests ISA suite
+- **Benchmarked** — 9,879× faster than Spike on riscv-tests ISA suite (51/51 tests passing)
 
 ## Quick Start
 
@@ -136,15 +136,13 @@ Herve was benchmarked against **Spike** (the official RISC-V ISA simulator) usin
 
 | Metric | Herve ISS | Spike | Speedup |
 |--------|-----------|-------|---------|
-| **Total instructions** | 17,941 | 273,022 | — |
-| **Total time** | 0.000167 s | 4.412 s | **26,419×** |
-| **Overall IPS** | 107,431,138 | 61,882 | **1,736×** |
-| **Tests passed** | 49/51 | 51/51 | — |
-| **Geometric mean speedup** | — | — | **29,466×** |
-| **Min speedup** | — | — | 8,111× |
-| **Max speedup** | — | — | 106,000× |
-
-> **Note:** Herve has 2 pre-existing failures (`rv32ui-p-lui` and `rv32ui-p-srai` with gp=7) — these are ISS bugs in `rv32_dpi.c`, not introduced by the benchmark.
+| **Total instructions** | 18,157 | 273,022 | — |
+| **Total time** | 0.000454 s | 4.485 s | **9,879×** |
+| **Overall IPS** | 39,993,392 | 60,874 | **657×** |
+| **Tests passed** | **51/51** | 51/51 | — |
+| **Geometric mean speedup** | — | — | **16,929×** |
+| **Min speedup** | — | — | 463× |
+| **Max speedup** | — | — | 132,000× |
 
 ### Why is Herve So Much Faster?
 
