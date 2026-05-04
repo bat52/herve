@@ -38,7 +38,7 @@ Target: RV32I (Base) + M (Multiply/Divide) + C (Compressed)
 
 - [x] CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI
 - [x] MRET, ECALL, EBREAK
-- [ ] WFI (no-op, handled by polling loop)
+- [x] WFI (wait-for-interrupt, implemented with sleep/wake)
 - [ ] SFENCE.VMA (no-op, no VM)
 
 ## Supported CSR Registers

@@ -56,6 +56,7 @@ static uint32_t memory_size = 0;
 static uint32_t regs[32];
 static uint32_t pc = 0;
 static uint32_t irq_mask = 0;
+static bool wfi_sleep = false;
 static bool initialized = false;
 
 /* CSR storage */
@@ -778,8 +779,17 @@ static bool execute_instruction(uint32_t insn) {
                     csr_mstatus |= 0x8; // set MIE
                     return true;
                 }
-                // WFI (0x10500073) — no-op, handled by polling loop
-                break;
+                // WFI (0x10500073) — wait for interrupt
+                if (csr_mstatus & 0x8) {
+                    // MIE is set — check if interrupt is already pending
+                    if (irq_mask != 0) {
+                        // Interrupt pending, will be taken at next rv_step top
+                        break;
+                    }
+                }
+                // No pending interrupt — enter sleep state
+                wfi_sleep = true;
+                return false;
             }
             // CSR instructions
             {
@@ -993,6 +1003,7 @@ uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
     memset(regs, 0, sizeof(regs));
     pc = 0;
     irq_mask = 0;
+    wfi_sleep = false;
     initialized = true;
 
     /* Load each PT_LOAD segment */
@@ -1067,6 +1078,7 @@ void rv_init(const char *firmware, size_t ram_size) {
     memset(regs, 0, sizeof(regs));
     pc = 0;
     irq_mask = 0;
+    wfi_sleep = false;
     initialized = true;
 
     if (firmware != NULL) {
@@ -1101,6 +1113,7 @@ void rv_init_from_buffer(const uint8_t *data, size_t size, size_t ram_size) {
     memset(regs, 0, sizeof(regs));
     pc = 0;
     irq_mask = 0;
+    wfi_sleep = false;
     initialized = true;
 
     if (data != NULL && size > 0) {
@@ -1117,6 +1130,7 @@ void rv_reset(uint32_t start_pc) {
     memset(regs, 0, sizeof(regs));
     pc = start_pc;
     irq_mask = 0;
+    wfi_sleep = false;
 }
 
 /* Count trailing zeros (CTZ) — returns position of lowest set bit */
@@ -1130,6 +1144,15 @@ static inline unsigned ctz32(uint32_t x) {
 int rv_step(int max_instructions) {
     if (!initialized || max_instructions <= 0) {
         return 0;
+    }
+
+    /* Wake from WFI if an interrupt is now pending */
+    if (wfi_sleep) {
+        if (irq_mask != 0 && (csr_mstatus & 0x8)) {
+            wfi_sleep = false;  /* wake up */
+        } else {
+            return 0;  /* still sleeping */
+        }
     }
 
     /* Check for pending interrupts at start of batch (only if MIE is set) */
@@ -1188,6 +1211,7 @@ void rv_set_ram(void *buf, size_t size) {
     }
     memory = (uint8_t *)buf;
     memory_size = (uint32_t)size;
+    wfi_sleep = false;
     initialized = true;
 }
 

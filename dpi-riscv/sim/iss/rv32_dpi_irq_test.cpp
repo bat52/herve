@@ -108,7 +108,7 @@ static void load_imm(uint32_t *ram, unsigned *addr, unsigned rd, uint32_t value)
 }
 
 // =======================================================================
-// Test: IRQ-driven GPIO toggle
+// Test: IRQ-driven GPIO toggle with WFI
 //
 // Firmware layout:
 //   0x0000: _start
@@ -116,10 +116,12 @@ static void load_imm(uint32_t *ram, unsigned *addr, unsigned rd, uint32_t value)
 //     - mtvec = 0x0100 (interrupt_handler address)
 //     - mstatus.MIE = 1
 //     - GPIO_IE = 1
+//     - wfi
 //     - j main_loop
 //
 //   0x000C: main_loop
-//     - j main_loop (infinite spin)
+//     - wfi
+//     - j main_loop
 //
 //   0x0100: interrupt_handler
 //     - lw t1, 8(t0)   // read GPIO_STATUS

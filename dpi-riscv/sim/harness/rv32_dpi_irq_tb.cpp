@@ -1,14 +1,16 @@
 /**
  * Verilator test harness for IRQ-driven GPIO toggle.
  *
- * This harness demonstrates the full IRQ injection path:
+ * This harness demonstrates the full IRQ injection path using WFI:
  *   1. Load IRQ firmware into ISS
  *   2. Run firmware (configures mtvec, enables MIE, enters main loop)
- *   3. Assert irq pin (simulating HW peripheral asserting interrupt)
- *   4. SV DPI detects irq, calls rv_set_irq(1)
- *   5. Next rv_step() — ISS vectors to interrupt handler
- *   6. Handler reads GPIO_STATUS, toggles GPIO_OUT via MMIO, mret
- *   7. Verify GPIO_OUT toggled via mem_write signal
+ *   3. Firmware executes WFI — ISS enters sleep state (rv_step returns 0)
+ *   4. Assert irq pin (simulating HW peripheral asserting interrupt)
+ *   5. SV DPI detects irq, calls rv_set_irq(1)
+ *   6. Next rv_step() — ISS wakes from WFI, vectors to interrupt handler
+ *   7. Handler reads GPIO_STATUS, toggles GPIO_OUT via MMIO, mret
+ *   8. Firmware loops back to WFI — ISS enters sleep again
+ *   9. Verify GPIO_OUT toggled via mem_write signal
  *
  * Signal ownership:
  *   clk       - C++ testbench (this file)
@@ -96,7 +98,7 @@ int main(int argc, char **argv) {
         i++;
     }
 
-    printf("=== RISC-V DPI IRQ Test Harness ===\n");
+    printf("=== RISC-V DPI IRQ Test Harness (WFI) ===\n");
     printf("Firmware: %s\n", firmware_path);
     printf("Step batch: %d\n", step_batch);
 
@@ -134,7 +136,7 @@ int main(int argc, char **argv) {
     tb->rstn = 1;
 
     // ---- Phase 1: Run firmware to configure mtvec, enable MIE, enter main loop ----
-    printf("\n--- Phase 1: Boot firmware (configure interrupts, enter main loop) ---\n");
+    printf("\n--- Phase 1: Boot firmware (configure interrupts, WFI) ---\n");
     int executed = rv_step(step_batch);
     printf("rv_step: executed %d instructions\n", executed);
     printf("PC after boot: 0x%08x\n", rv_get_pc());
@@ -153,10 +155,10 @@ int main(int argc, char **argv) {
         tick(tfp);
     }
 
-    // ---- Phase 3: Run ISS — first call vectors to interrupt handler ----
-    printf("\n--- Phase 3: Execute ISS (first call vectors to handler) ---\n");
+    // ---- Phase 3: Run ISS — wakes from WFI, vectors to handler ----
+    printf("\n--- Phase 3: Execute ISS (wakes from WFI, vectors to handler) ---\n");
     executed = rv_step(step_batch);
-    printf("rv_step: executed %d instructions (IRQ vectoring)\n", executed);
+    printf("rv_step: executed %d instructions (WFI wake + IRQ vectoring)\n", executed);
     printf("PC after vectoring: 0x%08x\n", rv_get_pc());
 
     // Tick the RTL clock a few edges
@@ -164,10 +166,10 @@ int main(int argc, char **argv) {
         tick(tfp);
     }
 
-    // ---- Phase 3b: Run ISS again — handler executes ----
-    printf("\n--- Phase 3b: Execute ISS again (handler runs) ---\n");
+    // ---- Phase 3b: Run ISS again — handler executes and returns to main loop ----
+    printf("\n--- Phase 3b: Execute ISS again (handler runs, returns to main loop) ---\n");
     executed = rv_step(step_batch);
-    printf("rv_step: executed %d instructions (handler execution)\n", executed);
+    printf("rv_step: executed %d instructions (handler execution + WFI)\n", executed);
     printf("PC after handler: 0x%08x\n", rv_get_pc());
 
     // Tick the RTL clock a few edges
@@ -185,10 +187,10 @@ int main(int argc, char **argv) {
         tick(tfp);
     }
 
-    // ---- Phase 5: Run more steps — should be back in main loop ----
-    printf("\n--- Phase 5: Post-IRQ execution (should be back in main loop) ---\n");
+    // ---- Phase 5: Post-IRQ execution (should be back in WFI sleep) ----
+    printf("\n--- Phase 5: Post-IRQ execution (should be back in WFI sleep) ---\n");
     executed = rv_step(step_batch);
-    printf("rv_step: executed %d instructions\n", executed);
+    printf("rv_step: executed %d instructions (should be 0 — WFI sleep)\n", executed);
     printf("PC after post-IRQ step: 0x%08x\n", rv_get_pc());
 
     // ---- Verify ----
@@ -202,12 +204,13 @@ int main(int argc, char **argv) {
         pass = false;
     }
 
-    // PC should be back in main loop (around 0x20-0x28, the j main_loop instruction)
+    // PC should be back at the WFI instruction (0x20) or the j main_loop (0x24)
+    // The main loop is: wfi (0x20) / j main_loop (0x24)
     uint32_t pc = rv_get_pc();
-    if (pc >= 0x20 && pc <= 0x28) {
+    if (pc == 0x20 || pc == 0x24) {
         printf("[PASS] PC returned to main loop (0x%08x)\n", pc);
     } else {
-        printf("[FAIL] PC = 0x%08x (expected ~0x20-0x28, main loop)\n", pc);
+        printf("[FAIL] PC = 0x%08x (expected 0x20 or 0x24, main loop)\n", pc);
         pass = false;
     }
 
