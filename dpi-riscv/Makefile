@@ -43,7 +43,7 @@ DUT_SV       = sim/dut/ahb_gpio.sv
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone
 
 all: run
 
@@ -291,6 +291,9 @@ softfloat.o: softfloat.c
 sync_stubs.o: sync_stubs.c
 	$(RISCV_PREFIX)-gcc -march=rv32im_zicsr -mabi=ilp32 -static -O2 -nostdlib -nostartfiles -c -o $@ $<
 
+alloca.o: newlib-stubs/alloca.c
+	$(RISCV_PREFIX)-gcc -march=rv32im_zicsr -mabi=ilp32 -static -O2 -nostdlib -nostartfiles -ffreestanding -Inewlib-stubs -c -o $@ $<
+
 mm.riscv: $(BMARKS_DIR)/mm/mm_main.c $(BMARKS_DIR)/mm/mm.c $(BMARKS_DIR)/mm/common.h $(BMARKS_DIR)/mm/rb.h $(COMMON_DIR)/crt.S $(COMMON_DIR)/syscalls.c $(COMMON_DIR)/util.h $(COMMON_DIR)/test.ld $(ENV_DIR)/encoding.h softfloat.o sync_stubs.o
 	$(RISCV_PREFIX)-gcc -march=rv32im_zicsr -mabi=ilp32 -DPREALLOCATE=1 -static -std=gnu99 -O2 -ffast-math -fno-common -fno-builtin-printf -nostdlib -nostartfiles \
 	  -I$(BMARKS_DIR) -I$(BMARKS_DIR)/mm -I$(COMMON_DIR) -I$(ENV_DIR) -Inewlib-stubs \
@@ -345,7 +348,31 @@ compare_benchmark_memcpy: rv32_dpi_benchmark_htif memcpy.riscv
 	bash tests/run_spike_benchmark.sh --benchmark memcpy.riscv --csv > spike_benchmark_memcpy.csv
 	python3 tests/analyze_benchmark.py herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv
 
+# ---- Dhrystone benchmark ----
+dhrystone.riscv: $(BMARKS_DIR)/dhrystone/dhrystone_main.c $(BMARKS_DIR)/dhrystone/dhrystone.c $(BMARKS_DIR)/dhrystone/dhrystone.h $(COMMON_DIR)/crt.S $(COMMON_DIR)/syscalls.c $(COMMON_DIR)/util.h $(COMMON_DIR)/test.ld $(ENV_DIR)/encoding.h alloca.o
+	$(RISCV_PREFIX)-gcc -march=rv32im_zicsr -mabi=ilp32 -DPREALLOCATE=1 -static -std=gnu99 -O2 -ffast-math -fno-common -fno-builtin-printf -nostdlib -nostartfiles \
+	  -I$(BMARKS_DIR) -I$(BMARKS_DIR)/dhrystone -I$(COMMON_DIR) -I$(ENV_DIR) -Inewlib-stubs \
+	  -T $(COMMON_DIR)/test.ld \
+	  -o $@ $(BMARKS_DIR)/dhrystone/dhrystone_main.c $(BMARKS_DIR)/dhrystone/dhrystone.c $(COMMON_DIR)/crt.S $(COMMON_DIR)/syscalls.c alloca.o -lgcc
+
+run_benchmark_dhrystone: dhrystone.riscv rv32_dpi_benchmark_htif
+	./rv32_dpi_benchmark_htif
+
+run_benchmark_dhrystone_csv: dhrystone.riscv rv32_dpi_benchmark_htif
+	./rv32_dpi_benchmark_htif --csv
+
+run_spike_benchmark_dhrystone: dhrystone.riscv
+	bash tests/run_spike_benchmark.sh --benchmark dhrystone.riscv
+
+run_spike_benchmark_dhrystone_csv: dhrystone.riscv
+	bash tests/run_spike_benchmark.sh --benchmark dhrystone.riscv --csv
+
+compare_benchmark_dhrystone: rv32_dpi_benchmark_htif dhrystone.riscv
+	./rv32_dpi_benchmark_htif --csv > herve_benchmark_dhrystone.csv
+	bash tests/run_spike_benchmark.sh --benchmark dhrystone.riscv --csv > spike_benchmark_dhrystone.csv
+	python3 tests/analyze_benchmark.py herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
+
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
 
 

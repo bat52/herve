@@ -1,0 +1,5 @@
+test_name,passed,instructions,time_sec,ips,reason
+dhrystone.riscv,PASS,324000,0.003178,101951201,PASS (HTIF exit=0)
+memcpy.riscv,PASS,66000,0.000776,85100018,PASS (HTIF exit=0)
+mm.riscv,PASS,33028000,0.267784,123338317,PASS (HTIF exit=0)
+TOTAL,PASS,33418000,0.271737,122979058,3 passed, 0 failed, 0 skipped

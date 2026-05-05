@@ -2,11 +2,12 @@
 
 ## Overview
 
-This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using four workloads:
+This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using five workloads:
 1. The standard **riscv-tests** ISA test suite (rv32ui-p-*, rv32um-p-*, rv32uc-p-*)
 2. The **median** benchmark from riscv-tests benchmarks (HTIF-based)
 3. The **mm** (matrix multiply) benchmark from riscv-tests benchmarks (HTIF-based, requires soft-float)
 4. The **memcpy** benchmark from riscv-tests benchmarks (HTIF-based, integer-only)
+5. The **dhrystone** benchmark from riscv-tests benchmarks (HTIF-based, integer-only, classic synthetic benchmark)
 
 ### ISA Test Suite Results
 
@@ -51,6 +52,23 @@ This report compares the execution performance of **Herve** (a lightweight RV32I
 | **Tests passed** | **1/1** | 1/1 | — |
 | **Benchmark** | memcpy.riscv | memcpy.riscv | — |
 | **Dependencies** | `string.h` (newlib-stubs) | Spike native | — |
+
+### Dhrystone Benchmark Results
+
+| Metric | Herve ISS | Spike | Speedup (Spike/Herve) |
+|--------|-----------|-------|----------------------|
+| **Total instructions** | 324,000 | 850,000 | — |
+| **Total time** | 0.002936 s | 11.852 s | **4,037×** |
+| **Overall IPS** | 110,357,869 | 71,718 | **1,539×** |
+| **Tests passed** | **1/1** | 1/1 | — |
+| **Benchmark** | dhrystone.riscv | dhrystone.riscv | — |
+| **Runs** | 500 (default) | 500 (default) | — |
+| **Dependencies** | `alloca.c` (newlib-stubs), `mcycle` CSR (0xB00) | Spike native | — |
+
+The Dhrystone benchmark is a classic synthetic integer benchmark that measures processor performance in **Dhrystones per second**. It exercises a mix of integer arithmetic, string operations, control flow, and procedure calls. With 500 runs, Herve executes 324K instructions in ~2.9ms, achieving ~110M IPS — roughly 1,539× Spike's IPS for this workload.
+
+**Note:** The Dhrystone benchmark uses `read_csr(mcycle)` for timing via `Start_Timer()` and `Stop_Timer()`. Herve now implements the `mcycle` CSR (0xB00) and `minstret` CSR (0xB02), which are incremented each instruction. Without this CSR support, the benchmark would loop forever multiplying `Number_Of_Runs` by 10 because `User_Time` would always be 0 (less than `Too_Small_Time`).
+
 
 ---
 
@@ -165,6 +183,7 @@ This means the **speedup ratios** are somewhat inflated for Herve since it execu
 | **median.riscv** | **11,000** | **165,000** | **0.000114** | **2.335** | **96,590,360** | **70,664** | **20,482×** |
 | **mm.riscv** | **33,017,000** | **33,520,000** | **0.297** | **446.957** | **111,350,185** | **74,996** | **1,507×** |
 | **memcpy.riscv** | **32,000** | **195,000** | **0.000380** | **2.939** | **84,311,478** | **66,349** | **7,734×** |
+| **dhrystone.riscv** | **324,000** | **850,000** | **0.002936** | **11.852** | **110,357,869** | **71,718** | **4,037×** |
 
 
 ## Analysis
@@ -265,6 +284,7 @@ The `run_spike_benchmark.sh` script supports a `--benchmark <elf>` flag for runn
 make median.riscv
 make mm.riscv          # requires softfloat.o and sync_stubs.o
 make memcpy.riscv
+make dhrystone.riscv   # requires alloca.o
 
 # Build the HTIF benchmark runner
 make rv32_dpi_benchmark_htif
@@ -279,16 +299,19 @@ make run_benchmark_htif_csv
 make run_spike_benchmark_median
 make run_spike_benchmark_mm
 make run_spike_benchmark_memcpy
+make run_spike_benchmark_dhrystone
 
 # Run Spike benchmark (CSV)
 make run_spike_benchmark_median_csv
 make run_spike_benchmark_mm_csv
 make run_spike_benchmark_memcpy_csv
+make run_spike_benchmark_dhrystone_csv
 
 # Full comparison (Herve vs Spike)
 make compare_benchmark_htif    # median
 make compare_benchmark_mm      # mm
 make compare_benchmark_memcpy  # memcpy
+make compare_benchmark_dhrystone  # dhrystone
 ```
 
 ### Makefile Targets
@@ -309,6 +332,13 @@ make compare_benchmark_memcpy  # memcpy
 | `run_spike_benchmark_mm_csv` | Run mm benchmark on Spike (CSV output) |
 | `run_spike_benchmark_memcpy` | Run memcpy benchmark on Spike |
 | `run_spike_benchmark_memcpy_csv` | Run memcpy benchmark on Spike (CSV output) |
+| `alloca.o` | Build the alloca() stub for Dhrystone bare-metal compilation |
+| `dhrystone.riscv` | Build the Dhrystone benchmark ELF from riscv-tests source (requires alloca.o) |
+| `run_benchmark_dhrystone` | Run Dhrystone benchmark on Herve |
+| `run_benchmark_dhrystone_csv` | Run Dhrystone benchmark on Herve (CSV output) |
+| `run_spike_benchmark_dhrystone` | Run Dhrystone benchmark on Spike |
+| `run_spike_benchmark_dhrystone_csv` | Run Dhrystone benchmark on Spike (CSV output) |
+| `compare_benchmark_dhrystone` | Full Herve vs Spike comparison for Dhrystone benchmark |
 | `compare_benchmark_htif` | Full Herve vs Spike comparison for HTIF benchmarks (median) |
 | `compare_benchmark_mm` | Full Herve vs Spike comparison for mm benchmark |
 | `compare_benchmark_memcpy` | Full Herve vs Spike comparison for memcpy benchmark |

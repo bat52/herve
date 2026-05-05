@@ -64,6 +64,7 @@ static uint32_t csr_mstatus = 0;
 static uint32_t csr_mtvec = 0;
 static uint32_t csr_mepc = 0;
 static uint32_t csr_mcause = 0;
+static uint64_t csr_mcycle = 0;   /* cycle counter, incremented each instruction */
 
 #ifdef __cplusplus
 extern "C" {
@@ -803,6 +804,8 @@ static bool execute_instruction(uint32_t insn) {
                     case 0x305: csr_val = csr_mtvec;   break;
                     case 0x341: csr_val = csr_mepc;    break;
                     case 0x342: csr_val = csr_mcause;  break;
+                    case 0xB00: csr_val = (uint32_t)(csr_mcycle & 0xFFFFFFFFu); break; // mcycle (lower 32 bits)
+                    case 0xB02: csr_val = (uint32_t)(csr_mcycle & 0xFFFFFFFFu); break; // minstret
                     case 0xF11: csr_val = 0x00000000u; break; // mvendorid
                     case 0xF12: csr_val = 0x00000001u; break; // marchid
                     case 0xF14: csr_val = 0x00000000u; break; // mhartid
@@ -1203,6 +1206,7 @@ void rv_reset(uint32_t start_pc) {
     pc = start_pc;
     irq_mask = 0;
     wfi_sleep = false;
+    csr_mcycle = 0;
 }
 
 /* Count trailing zeros (CTZ) — returns position of lowest set bit */
@@ -1268,6 +1272,7 @@ int rv_step(int max_instructions) {
             /* pc is advanced by +4 inside execute_instruction */
         }
         executed += 1;
+        csr_mcycle++;
     }
 
     return executed;

@@ -71,7 +71,7 @@ extern "C" void dpi_mmio_write(int addr, int data) {
 // -----------------------------------------------------------------------
 
 #ifndef MAX_INSTRUCTIONS
-#define MAX_INSTRUCTIONS 200000000  // 200M max for benchmarks (mm needs more)
+#define MAX_INSTRUCTIONS 500000000  // 500M max for benchmarks (dhrystone needs more)
 #endif
 #define MAX_STALE_CHECKS 50000
 
