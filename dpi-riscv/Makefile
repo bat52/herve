@@ -159,8 +159,26 @@ obj_dir/V$(TOP)_irq: $(SV) $(CPP_IRQ) $(C) $(FIRMWARE_IRQ_BIN)
 run_irq: firmware_irq obj_dir/V$(TOP)_irq
 	./obj_dir/V$(TOP)_irq
 
+# ---- MMIO regs firmware ----
+FIRMWARE_MMIO_REGS_S = firmware_mmio_regs.S
+FIRMWARE_MMIO_REGS_BIN = firmware_mmio_regs.bin
+FIRMWARE_MMIO_REGS_O = firmware_mmio_regs.o
+FIRMWARE_MMIO_REGS_ELF = firmware_mmio_regs.elf
+
+$(FIRMWARE_MMIO_REGS_O): $(FIRMWARE_MMIO_REGS_S)
+	$(RISCV_PREFIX)-as -march=rv32im -o $@ $<
+
+$(FIRMWARE_MMIO_REGS_ELF): $(FIRMWARE_MMIO_REGS_O)
+	$(RISCV_PREFIX)-ld -m elf32lriscv -Ttext=0x00000000 -o $@ $<
+
+$(FIRMWARE_MMIO_REGS_BIN): $(FIRMWARE_MMIO_REGS_ELF)
+	$(RISCV_PREFIX)-objcopy -O binary $< $@
+
+firmware_mmio_regs: $(FIRMWARE_MMIO_REGS_BIN)
+
 # ---- AHB firmware ----
 $(FIRMWARE_AHB_O): $(FIRMWARE_AHB_S)
+
 	$(RISCV_PREFIX)-as -march=rv32im_zicsr -o $@ $<
 
 $(FIRMWARE_AHB_ELF): $(FIRMWARE_AHB_O)
@@ -373,6 +391,7 @@ compare_benchmark_dhrystone: rv32_dpi_benchmark_htif dhrystone.riscv
 	python3 tests/analyze_benchmark.py herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
 
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o firmware_mmio_regs.elf firmware_mmio_regs.bin firmware_mmio_regs.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
+
 
 
