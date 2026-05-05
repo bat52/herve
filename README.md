@@ -208,6 +208,39 @@ herve/
 └── riscv-tests/                # riscv-tests submodule (ISA tests)
 ```
 
+## Development Environment
+
+The `llm/` directory contains utility scripts for setting up AI-assisted development workflows.
+
+### `llm/agent.sh` — Developer Agent Session
+
+Launches a **tmux** workspace pre-configured for agentic coding:
+
+| Pane | Tool | Purpose |
+|------|------|---------|
+| Left | `ranger` | Terminal file browser for quick navigation |
+| Right top | `bash` | General-purpose shell |
+| Right bottom | `cline --tui` | Cline AI agent in TUI (terminal UI) mode |
+
+**Usage:**
+
+```bash
+cd llm
+bash agent.sh
+```
+
+**Requirements:** `tmux`, `ranger`, and `cline` installed and available in `PATH`.
+
+**Layout:** Three panes in a left–right split (left pane for ranger, right column split top–bottom for bash/cline). The shell pane is focused by default.
+
+### Other Scripts in `llm/`
+
+| Script | Purpose |
+|--------|---------|
+| `install_gemini_cli.sh` | Sets up a Node.js project with Google's Generative AI SDK |
+| `install_ollama_deepseek.sh` | Installs Ollama and pulls the DeepSeek Coder model |
+| `install_openclaw.sh` | Clones and installs the OpenClaw project in `~/openclaw` |
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.
