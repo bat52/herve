@@ -43,7 +43,7 @@ DUT_SV       = sim/dut/ahb_gpio.sv
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb run_benchmark run_spike_benchmark compare_benchmark
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests
 
 all: run
 
@@ -231,11 +231,27 @@ rv32_dpi_irq_test: sim/iss/rv32_dpi_irq_test.cpp sim/iss/rv32_dpi.c
 run_irq_standalone: rv32_dpi_irq_test
 	./rv32_dpi_irq_test
 
+# ---- Build riscv-tests ISA ELF binaries (needs RISC-V toolchain) ----
+# We build only the "p" (physical) test variants: rv32ui-p-*, rv32um-p-*, rv32uc-p-*.
+# The "v" (virtual-memory) variants require string.h from newlib and are
+# not needed by our test runner.  We build the individual p-test binaries
+# directly rather than using the rv32ui/rv32um/rv32uc targets (which would
+# also try to build the failing v-variants).
+RISCV_TESTS_ISA_DIR = ../riscv-tests/isa
+
+# Collect all p-test targets from the riscv-tests Makefrags
+RV32UI_P_TESTS = $(addprefix rv32ui-p-, simple add addi and andi auipc beq bge bgeu blt bltu bne fence_i jal jalr lb lbu lh lhu lw ld_st lui ma_data or ori sb sh sw st_ld sll slli slt slti sltiu sltu sra srai srl srli sub xor xori)
+RV32UM_P_TESTS = $(addprefix rv32um-p-, mul mulh mulhsu mulhu div divu rem remu)
+RV32UC_P_TESTS = $(addprefix rv32uc-p-, rvc)
+
+build_riscv_tests:
+	$(MAKE) -C $(RISCV_TESTS_ISA_DIR) XLEN=32 $(RV32UI_P_TESTS) $(RV32UM_P_TESTS) $(RV32UC_P_TESTS)
+
 # ---- riscv-tests validation (no Verilator, no RISC-V toolchain) ----
 rv32_dpi_riscv_tests: sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c
 	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c
 
-run_riscv_tests: rv32_dpi_riscv_tests
+run_riscv_tests: build_riscv_tests rv32_dpi_riscv_tests
 	./rv32_dpi_riscv_tests
 
 # ---- Benchmark: Herve ISS vs Spike comparison ----

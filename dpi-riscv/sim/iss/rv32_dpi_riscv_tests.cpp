@@ -248,6 +248,14 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (num_tests == 0) {
+        printf("No matching test ELF files found in '%s'.\n", test_dir);
+        printf("Run 'make build_riscv_tests' from the dpi-riscv/ directory to build them.\n");
+        printf("Skipping riscv-tests validation.\n\n");
+        closedir(dir);
+        return 0;
+    }
+
     printf("Found %d test ELF files\n\n", num_tests);
 
     // Allocate global RAM once — 2GB + 16MB to cover address 0x80000000

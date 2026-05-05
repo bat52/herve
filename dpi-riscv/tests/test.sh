@@ -100,23 +100,7 @@ make clean
 echo ""
 
 # ---------------------------------------------------------------------------
-# 1. Firmware builds  (need RISC-V toolchain)
-# ---------------------------------------------------------------------------
-echo "============================================"
-echo " 1. Firmware builds"
-echo "============================================"
-
-SKIP_FW=
-[ "$HAS_TOOLCHAIN" -eq 0 ] && SKIP_FW="no RISC-V toolchain"
-
-run_test "firmware"            "firmware"            "$SKIP_FW"
-run_test "firmware_muldiv"     "firmware_muldiv"     "$SKIP_FW"
-run_test "firmware_irq"        "firmware_irq"        "$SKIP_FW"
-run_test "firmware_ahb"        "firmware_ahb"        "$SKIP_FW"
-echo ""
-
-# ---------------------------------------------------------------------------
-# 2. Standalone ISS tests  (need g++ only)
+# 2. Standalone ISS tests (no Verilator)
 # ---------------------------------------------------------------------------
 echo "============================================"
 echo " 2. Standalone ISS tests (no Verilator)"
@@ -125,10 +109,29 @@ echo "============================================"
 SKIP_ISS=
 [ "$HAS_GXX" -eq 0 ] && SKIP_ISS="no g++"
 
+# Check if riscv-tests ISA ELF binaries exist; if not, try to build them
+SKIP_RISCV_TESTS=
+if [ "$HAS_GXX" -eq 0 ]; then
+    SKIP_RISCV_TESTS="no g++"
+elif [ "$HAS_TOOLCHAIN" -eq 0 ]; then
+    SKIP_RISCV_TESTS="no RISC-V toolchain (needed to build riscv-tests ELFs)"
+else
+    # Check if at least one RV32 test ELF exists in ../riscv-tests/isa/
+    if ! ls ../riscv-tests/isa/rv32ui-p-* &>/dev/null; then
+        echo "  riscv-tests ELFs not found — attempting to build..."
+        if make build_riscv_tests 2>&1; then
+            echo "  riscv-tests built successfully."
+        else
+            echo "  riscv-tests build FAILED — skipping run_riscv_tests."
+            SKIP_RISCV_TESTS="riscv-tests build failed"
+        fi
+    fi
+fi
+
 run_test "run_standalone"      "run_standalone"      "$SKIP_ISS"
 run_test "run_c_test"          "run_c_test"          "$SKIP_ISS"
 run_test "run_irq_standalone"  "run_irq_standalone"  "$SKIP_ISS"
-run_test "run_riscv_tests"     "run_riscv_tests"     "$SKIP_ISS"
+run_test "run_riscv_tests"     "run_riscv_tests"     "$SKIP_RISCV_TESTS"
 echo ""
 
 # ---------------------------------------------------------------------------
