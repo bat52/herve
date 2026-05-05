@@ -32,6 +32,23 @@ void rv_init(const char *firmware, size_t ram_size);
 uint32_t rv_init_elf(const char *elf_path, size_t ram_size);
 
 /**
+ * Load an ELF executable from an in-memory buffer into pre-allocated RAM.
+ *
+ * Parses the ELF header and program headers to load PT_LOAD segments
+ * at their correct virtual addresses, then returns the entry point.
+ * Unlike rv_init_elf(), this function does NOT allocate or free memory —
+ * it assumes the RAM buffer is already set up via rv_init(), rv_set_ram(),
+ * or a prior rv_init_elf() call.
+ *
+ * Supports 32-bit little-endian RISC-V ELF files (EM_RISCV = 0xF3).
+ *
+ * @param elf_data Pointer to the ELF file data in memory.
+ * @param elf_size Size of the ELF data in bytes.
+ * @return Entry point address (e_entry from ELF header), or 0 on failure.
+ */
+uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size);
+
+/**
  * Initialize the emulator from an in-memory buffer.
  * Useful when firmware is embedded in the testbench binary.
  * @param data Pointer to firmware binary data (NULL = no firmware).

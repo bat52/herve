@@ -59,7 +59,6 @@ extern "C" void dpi_mmio_write(int addr, int data) {
 // Test runner
 // -----------------------------------------------------------------------
 
-#define TEST_BASE_ADDR 0x80000000u
 #define MAX_INSTRUCTIONS 200000
 #define MAX_STALE_CHECKS 200
 
@@ -76,21 +75,23 @@ struct BenchmarkResult {
 static uint8_t *global_ram = NULL;
 static size_t global_ram_size = 0;
 
-static int run_test(const uint8_t *binary, size_t binary_size,
+static int run_test(const uint8_t *elf_data, size_t elf_size,
                     const char *test_name, BenchmarkResult *result) {
     memset(mmio_region, 0, sizeof(mmio_region));
 
-    if (TEST_BASE_ADDR + binary_size > global_ram_size) {
+    // Load ELF segments at their correct virtual addresses
+    uint32_t entry = rv_load_elf(elf_data, elf_size);
+    if (entry == 0) {
         result->passed = false;
-        result->reason = "binary too large for RAM";
+        result->reason = "ELF load failed";
         result->instructions = 0;
         result->time_sec = 0;
         result->ips = 0;
         return -1;
     }
-    memcpy(&global_ram[TEST_BASE_ADDR], binary, binary_size);
 
-    rv_reset(TEST_BASE_ADDR);
+    // Reset PC to ELF entry point (also resets registers)
+    rv_reset(entry);
 
     // Timing
     auto start = std::chrono::high_resolution_clock::now();
@@ -190,7 +191,7 @@ static uint8_t *load_file(const char *path, size_t *size_out) {
 // -----------------------------------------------------------------------
 
 int main(int argc, char **argv) {
-    const char *test_dir = "../riscv-tests/isa/bin";
+    const char *test_dir = "../riscv-tests/isa";
     bool csv_mode = false;
 
     for (int i = 1; i < argc; i++) {
@@ -213,14 +214,25 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Collect test files
+    // Collect test files — match the same prefixes that Spike uses
+    static const char *prefixes[] = {
+        "rv32ui-p-", "rv32um-p-", "rv32uc-p-", NULL
+    };
     struct dirent *entry;
     std::vector<std::string> test_names;
 
     while ((entry = readdir(dir)) != NULL) {
-        const char *ext = strrchr(entry->d_name, '.');
-        if (ext && strcmp(ext, ".bin") == 0) {
-            test_names.push_back(entry->d_name);
+        // Skip directories and dump/hex files
+        if (entry->d_type == DT_DIR) continue;
+        const char *dot = strrchr(entry->d_name, '.');
+        if (dot && (strcmp(dot, ".dump") == 0 || strcmp(dot, ".hex") == 0)) continue;
+
+        // Match against known prefixes
+        for (int p = 0; prefixes[p] != NULL; p++) {
+            if (strncmp(entry->d_name, prefixes[p], strlen(prefixes[p])) == 0) {
+                test_names.push_back(entry->d_name);
+                break;
+            }
         }
     }
     closedir(dir);
@@ -228,15 +240,15 @@ int main(int argc, char **argv) {
     std::sort(test_names.begin(), test_names.end());
 
     if (!csv_mode) {
-        printf("Found %zu test binaries\n\n", test_names.size());
+        printf("Found %zu test ELF files\n\n", test_names.size());
     }
 
     // Allocate global RAM using mmap with MAP_NORESERVE.
-    // The riscv-tests binaries are linked at 0x80000000, so we need RAM that
+    // The riscv-tests ELF files are linked at 0x80000000, so we need RAM that
     // covers that address. Using mmap with MAP_NORESERVE gives us a large
     // virtual address range without committing physical pages (lazy allocation).
     // This avoids the 2GB malloc+memset that causes OOM on constrained systems.
-    global_ram_size = (size_t)TEST_BASE_ADDR + (16u << 20); // ~2.15 GB virtual
+    global_ram_size = (size_t)0x80000000 + (16u << 20); // ~2.15 GB virtual
     global_ram = (uint8_t *)mmap(NULL, global_ram_size,
                                   PROT_READ | PROT_WRITE,
                                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
@@ -247,9 +259,6 @@ int main(int argc, char **argv) {
     }
     // Tell the ISS to use our pre-allocated buffer instead of doing its own malloc
     rv_set_ram(global_ram, global_ram_size);
-    // Zero out only the region where we'll load binaries (around 0x80000000)
-    // and the BSS area. No need to zero 2GB.
-    memset(&global_ram[TEST_BASE_ADDR - 0x10000], 0, 0x20000); // 128KB around test area
 
     // Run each test
     std::vector<BenchmarkResult> results;
@@ -259,9 +268,9 @@ int main(int argc, char **argv) {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", test_dir, test_names[i].c_str());
 
-        size_t binary_size;
-        uint8_t *binary = load_file(path, &binary_size);
-        if (!binary) {
+        size_t elf_size;
+        uint8_t *elf_data = load_file(path, &elf_size);
+        if (!elf_data) {
             if (!csv_mode) {
                 printf("  [SKIP] %s (cannot load)\n", test_names[i].c_str());
             }
@@ -269,12 +278,8 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        // Remove .bin extension for display
-        std::string display_name = test_names[i];
-        size_t dot_pos = display_name.rfind('.');
-        if (dot_pos != std::string::npos) {
-            display_name = display_name.substr(0, dot_pos);
-        }
+        // Use the filename directly (no extension to strip)
+        const std::string &display_name = test_names[i];
 
         BenchmarkResult result;
         result.name = display_name;
@@ -284,8 +289,8 @@ int main(int argc, char **argv) {
         result.time_sec = 0;
         result.ips = 0;
 
-        int ret = run_test(binary, binary_size, display_name.c_str(), &result);
-        free(binary);
+        int ret = run_test(elf_data, elf_size, display_name.c_str(), &result);
+        free(elf_data);
 
         results.push_back(result);
 

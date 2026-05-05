@@ -1056,6 +1056,78 @@ uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
     return ehdr.e_entry;
 }
 
+uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size) {
+    if (elf_data == NULL || elf_size < sizeof(struct elf32_ehdr)) {
+        return 0;
+    }
+
+    const struct elf32_ehdr *ehdr = (const struct elf32_ehdr *)elf_data;
+
+    /* Validate ELF magic */
+    if (ehdr->e_ident[0] != ELFMAG0 || ehdr->e_ident[1] != ELFMAG1 ||
+        ehdr->e_ident[2] != ELFMAG2 || ehdr->e_ident[3] != ELFMAG3) {
+        fprintf(stderr, "rv_load_elf: not an ELF file (bad magic)\n");
+        return 0;
+    }
+
+    /* Validate 32-bit, little-endian, RISC-V */
+    if (ehdr->e_ident[4] != ELFCLASS32) {
+        fprintf(stderr, "rv_load_elf: not a 32-bit ELF\n");
+        return 0;
+    }
+    if (ehdr->e_ident[5] != ELFDATA2LSB) {
+        fprintf(stderr, "rv_load_elf: not little-endian\n");
+        return 0;
+    }
+    if (ehdr->e_machine != EM_RISCV) {
+        fprintf(stderr, "rv_load_elf: not RISC-V (machine=0x%04x)\n", ehdr->e_machine);
+        return 0;
+    }
+
+    /* Validate program headers fit in the buffer */
+    uint32_t ph_end = ehdr->e_phoff + (uint32_t)ehdr->e_phnum * ehdr->e_phentsize;
+    if (ph_end > elf_size || ehdr->e_phentsize < sizeof(struct elf32_phdr)) {
+        fprintf(stderr, "rv_load_elf: program headers exceed buffer\n");
+        return 0;
+    }
+
+    /* Load each PT_LOAD segment */
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const struct elf32_phdr *phdr = (const struct elf32_phdr *)
+            (elf_data + ehdr->e_phoff + i * ehdr->e_phentsize);
+
+        if (phdr->p_type != PT_LOAD) {
+            continue;
+        }
+
+        /* Check that segment fits in allocated RAM */
+        uint32_t end = phdr->p_vaddr + phdr->p_memsz;
+        if (end > memory_size) {
+            fprintf(stderr, "rv_load_elf: segment %u (vaddr=0x%08x, memsz=%u) "
+                    "exceeds RAM size (0x%08x)\n",
+                    (unsigned)i, phdr->p_vaddr, phdr->p_memsz, memory_size);
+            continue;
+        }
+
+        /* Copy segment data from ELF buffer */
+        if (phdr->p_filesz > 0) {
+            if (phdr->p_offset + phdr->p_filesz > elf_size) {
+                fprintf(stderr, "rv_load_elf: segment %u data exceeds buffer\n", (unsigned)i);
+                continue;
+            }
+            memcpy(&memory[phdr->p_vaddr], elf_data + phdr->p_offset, phdr->p_filesz);
+        }
+
+        /* Zero-fill BSS (p_memsz > p_filesz) */
+        if (phdr->p_memsz > phdr->p_filesz) {
+            memset(&memory[phdr->p_vaddr + phdr->p_filesz], 0,
+                   phdr->p_memsz - phdr->p_filesz);
+        }
+    }
+
+    return ehdr->e_entry;
+}
+
 void rv_init(const char *firmware, size_t ram_size) {
     if (memory != NULL) {
         free(memory);

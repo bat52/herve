@@ -50,11 +50,13 @@ _start:
     sw   t1, 4(t0)                 # GPIO_IE = 1
 
     /* ================================================================
-     * 4. Main loop: spin forever
+     * 4. Main loop: wait for interrupt (WFI), then loop back
+     *    WFI stalls the hart until an interrupt is pending.
      *    When IRQ fires, PC jumps to mtvec (interrupt_handler)
      *    After mret, execution resumes here
      * ================================================================ */
 main_loop:
+    wfi
     j main_loop
 
     /* ================================================================

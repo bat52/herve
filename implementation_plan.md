@@ -1,178 +1,119 @@
-# Implementation Plan: Debug Failing Dhrystone Implementation for Herve ISS
+# Implementation Plan
+
+[Overview]
+Transition the riscv-tests validation suite from using objcopy-converted .bin files to executing the native ELF files directly, ensuring Herve runs the identical ELF binaries that Spike executes in run_spike_benchmark.sh.
+
+The existing workflow converts riscv-tests ELF binaries to flat .bin files via `riscv64-unknown-elf-objcopy -O binary`, then loads them at a fixed offset (0x80000000) into the ISS. Meanwhile, `run_spike_benchmark.sh` feeds the raw ELF files directly to Spike. This discrepancy means we're testing two different input formats. An in-memory ELF loader (`rv_load_elf`) has already been prototyped in the ISS core (`rv_init_elf` does file-based loading), but the standalone test runners (`rv32_dpi_riscv_tests.cpp` and `rv32_dpi_benchmark.cpp`) bypass it — they allocate a shared 2GB mmap buffer and load .bin files manually. The solution is to add a buffer-based ELF loader that writes into the pre-allocated RAM, then update the two test runners and the shell script to discover and load the same ELF files (bare files with no extension in `riscv-tests/isa/`) that Spike uses.
+
+[Types]
+No new types; the existing `struct elf32_ehdr` and `struct elf32_phdr` in `rv32_dpi.c` are reused.
+
+[Files]
+
+Single sentence describing file modifications.
+
+Detailed breakdown:
+- **`dpi-riscv/sim/iss/rv32_dpi.h`** — modified
+  - Add declaration: `uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size);`
+  - This is a buffer-based ELF loader that works with a pre-allocated RAM buffer.
+
+- **`dpi-riscv/sim/iss/rv32_dpi.c`** — modified
+  - Implement `rv_load_elf(const uint8_t *elf_data, size_t elf_size)`:
+    - Takes a pointer to an ELF file loaded into memory by the caller.
+    - Parses the ELF header and program headers directly from the buffer.
+    - Loads each `PT_LOAD` segment at its `p_vaddr` into the existing `memory[]` buffer.
+    - Zero-fills BSS (`p_memsz > p_filesz`).
+    - Returns the entry point (`e_entry`) on success, 0 on failure.
+    - Does NOT allocate or free memory — assumes `memory` is already set up (via `rv_init()`, `rv_set_ram()`, or a prior `rv_init_elf()` call).
+    - Does NOT call `fopen`/`fread` — operates purely in memory.
+    - Validates: ELF magic, 32-bit, little-endian, RISC-V machine type.
+
+- **`dpi-riscv/sim/iss/rv32_dpi_riscv_tests.cpp`** — modified
+  - **File discovery**: change from scanning `*.bin` files to scanning for files matching the same patterns as `run_spike_benchmark.sh`:
+    - Prefixes: `rv32ui-p-`, `rv32um-p-`, `rv32uc-p-`
+    - Exclude directories, files ending in `.dump` or `.hex`
+    - Filter by trying `fopen()` (same as current) — if the file opens and passes the prefix/extension filter, include it.
+  - **Loading**: replace `load_file()` + `memcpy(&global_ram[TEST_BASE_ADDR], binary, binary_size)` with `load_file()` + `rv_load_elf(binary, binary_size)`, then `rv_reset(entry_point)`.
+  - Remove the `TEST_BASE_ADDR` constant (no longer needed since ELF segments self-describe their addresses).
+  - Change the default test directory from `../riscv-tests/isa/bin` to `../riscv-tests/isa`.
+  - The `mmap`/`rv_set_ram` setup remains unchanged (the 2GB pre-allocated buffer).
+
+- **`dpi-riscv/sim/iss/rv32_dpi_benchmark.cpp`** — modified
+  - Identical changes to the file-discovery and loading logic as `rv32_dpi_riscv_tests.cpp`.
+  - Change default directory from `../riscv-tests/isa/bin` to `../riscv-tests/isa`.
+  - Replace manual binary loading with `rv_load_elf()` + `rv_reset(entry_point)`.
+  - Remove `TEST_BASE_ADDR`.
+
+- **`dpi-riscv/tests/run_riscv_tests.sh`** — modified
+  - **Remove** the ELF → binary conversion loop (lines 70-79):
+    ```bash
+    for pattern in rv32ui-p- rv32um-p- rv32uc-p-; do
+        for elf in "$RISCV_TESTS_DIR/isa/$pattern"*; do
+            [ -f "$elf" ] || continue
+            case "$elf" in *.dump|*.hex) continue ;; esac
+            base="$(basename "$elf")"
+            riscv64-unknown-elf-objcopy -O binary "$elf" "$TEST_BIN_DIR/$base.bin"
+        done
+    done
+    ```
+  - **Remove** the `TEST_BIN_DIR` variable and the `mkdir -p "$TEST_BIN_DIR"` line.
+  - **Remove** the `.bin` file count check (`NUM_BINS`).
+  - **Change** the test runner invocation from:
+    ```bash
+    ./rv32_dpi_riscv_tests "$TEST_BIN_DIR"
+    ```
+    to:
+    ```bash
+    ./rv32_dpi_riscv_tests "$RISCV_TESTS_DIR/isa"
+    ```
+  - The build step (`make XLEN=32 ...`) remains unchanged — it produces the bare ELF files in `riscv-tests/isa/`.
+
+[Functions]
+
+Single sentence describing function modifications.
+
+Detailed breakdown:
+- **New function**: `uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size)` in `rv32_dpi.c`
+  - Signature: `uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size)`
+  - File: `dpi-riscv/sim/iss/rv32_dpi.c`
+  - Purpose: In-memory ELF loader that writes PT_LOAD segments into the existing ISS RAM buffer at their virtual addresses and returns the entry point.
+  - Implementation: Reuses the ELF-parsing logic from `rv_init_elf()` but reads from a buffer instead of a file. No malloc/free.
+
+- **Modified function**: `main()` in `rv32_dpi_riscv_tests.cpp`
+  - Replace `.bin` extension filter with prefix-based filter matching `rv32ui-p-`, `rv32um-p-`, `rv32uc-p-`.
+  - Use `rv_load_elf()` after loading file into memory, then `rv_reset(entry_point)`.
+  - Remove `TEST_BASE_ADDR`.
+
+- **Modified function**: `run_test()` in `rv32_dpi_riscv_tests.cpp`
+  - Remove the `memcpy` at fixed offset. Instead, the caller loads ELF via `rv_load_elf()` and passes the entry point.
+  - Keep the execution loop and gp-checking logic unchanged.
+
+- **Modified function**: `main()` in `rv32_dpi_benchmark.cpp`
+  - Same changes as `rv32_dpi_riscv_tests.cpp::main()`.
+
+- **Modified function**: `run_test()` in `rv32_dpi_benchmark.cpp`
+  - Same changes as `rv32_dpi_riscv_tests.cpp::run_test()`.
+
+[Classes]
+
+No class modifications — the codebase is C/C++ with no C++ classes beyond structs.
+
+[Dependencies]
 
-## Overview
+No new dependencies. The ELF structures (`struct elf32_ehdr`, `struct elf32_phdr`) and constants (`EM_RISCV`, `PT_LOAD`, etc.) are already defined inline in `rv32_dpi.c`.
 
-Debug and fix the Dhrystone benchmark runner (`rv32_dpi_dhrystone.cpp`) and the Herve ISS core (`rv32_dpi.c`) so that the Dhrystone ELF binary executes correctly on the Herve ISS, producing correct results comparable to Spike.
+[Testing]
 
-The Dhrystone benchmark (`dhrystone.riscv`) is built from the riscv-tests benchmark infrastructure. It links at `0x80000000` using `test.ld`, which places the `.tohost` section at `0x80001000`. The program uses HTIF (Host-Target Interface) for console I/O (`printf` → `putchar` → `syscall(SYS_write, ...)`) and program exit (`tohost_exit()`). The Herve ISS already has HTIF support in `rv32_dpi.c` (lines 159-215), but the Dhrystone runner (`rv32_dpi_dhrystone.cpp`) has several critical issues that prevent correct execution.
+The existing test framework (`test.sh` → `run_riscv_tests`) validates the change end-to-end. After modification, running `make run_riscv_tests` in `dpi-riscv/` must produce the same pass/fail results as before (all ~48 tests should pass). Running `make run_benchmark_csv` and `make run_spike_benchmark_csv` should produce CSV files referencing the same test names. Manual verification: `readelf -h` can confirm the ELFs Spike runs are the same files Herve will now load.
 
-The existing riscv-tests ISA test runner (`rv32_dpi_riscv_tests.cpp`) works correctly for all 51 ISA tests because those tests are simple `.bin` files loaded at `0x80000000` that execute directly without needing startup code. The Dhrystone benchmark is different — it's a full ELF binary with a `_start` entry point that expects the `crt.S` startup sequence to run before `main()`.
+[Implementation Order]
 
-## Root Cause Analysis
+Single sentence describing the implementation sequence.
 
-### Bug 1: `rv_reset()` clears HTIF state but `rv_step()` doesn't check HTIF writes during execution
-
-The `rv_step()` function (line 1236) calls `execute_instruction()` which calls `write_u32()` which calls `handle_htif_write()`. The HTIF handler correctly detects program exit (bit 0 = 1) and sets `halted = true`. However, the `rv_step()` loop checks `halted` at the top of each iteration (line 1258), so the exit is detected on the *next* instruction fetch. This is actually correct behavior — the exit is detected one instruction after the `tohost` write.
-
-**Verdict: Not a bug.** The HTIF exit mechanism works correctly.
-
-### Bug 2: `rv_reset()` doesn't set `sp` (x2) to a valid stack address
-
-The `crt.S` startup code (line 131-133) sets up the stack pointer:
-```asm
-add sp, a0, 1
-sll sp, sp, STKSHIFT    ; STKSHIFT = 17 → sp = (cid+1) << 17 = 0x20000
-add sp, sp, tp          ; tp = _end (aligned to 64 bytes)
-```
-
-The Dhrystone runner calls `rv_reset(entry)` where `entry` is the ELF entry point (`_start`). The `_start` function in `crt.S` will execute and set up the stack. However, `_start` also:
-1. Clears all registers (lines 18-48)
-2. Enables FPU/vector (lines 51-52)
-3. Checks XLEN (lines 55-66)
-4. Sets up trap vector (lines 110-111)
-5. Sets global pointer (lines 114-117)
-6. Sets thread pointer (lines 119-121)
-7. Gets core ID and sets up stack (lines 124-136)
-8. Jumps to `_init` (line 137)
-
-**Verdict: The `_start` function should execute correctly** since the ELF is loaded at `0x80000000` and the entry point is `_start`. The startup code will set up the stack, TLS, and call `_init` → `main()`.
-
-### Bug 3: `write_u32()` HTIF handling is broken for 64-bit tohost writes
-
-The critical bug is in `write_u32()` (lines 217-237). The Dhrystone program's `syscall()` function writes a 64-bit pointer value to `tohost`:
-
-```c
-tohost = (uintptr_t)magic_mem;  // 64-bit write
-```
-
-The `tohost` variable is declared as `volatile uint64_t tohost` at the `.tohost` section (address `0x80001000`). The RISC-V `sw` instruction writes 32 bits at a time. The compiler generates two `sw` instructions: one for the lower 32 bits at `0x80001000`, and one for the upper 32 bits at `0x80001004`.
-
-The `write_u32()` function at line 218-225 attempts to reconstruct the 64-bit value:
-```c
-uint64_t full = (addr == HTIF_BASE + 4)
-    ? ((uint64_t)value << 32) | (htif_tohost & 0xFFFFFFFFULL)
-    : ((htif_tohost & 0xFFFFFFFF00000000ULL) | value);
-handle_htif_write(HTIF_BASE, full);
-```
-
-**BUG: The order of writes matters.** The `sw` to `HTIF_BASE + 4` (upper 32 bits) may arrive *before* the `sw` to `HTIF_BASE` (lower 32 bits). When the upper word is written first:
-- `addr == HTIF_BASE + 4` → `full = (value << 32) | (htif_tohost & 0xFFFFFFFF)`
-- But `htif_tohost` is still 0 (lower word not written yet)
-- So `full = (upper << 32) | 0` — this is wrong, the lower 32 bits are missing
-
-When the lower word is written first:
-- `addr == HTIF_BASE` → `full = (htif_tohost & 0xFFFFFFFF00000000) | value`
-- But `htif_tohost` is still 0 (upper word not written yet)
-- So `full = 0 | lower` — this is also wrong, the upper 32 bits are missing
-
-**The fix:** Buffer the two 32-bit writes and only call `handle_htif_write()` when both halves have been received.
-
-### Bug 4: `write_u32()` HTIF handling doesn't handle the `tohost_exit()` case correctly
-
-The `tohost_exit()` function writes `(code << 1) | 1` to `tohost`. This is a 64-bit value where bit 0 = 1 (exit flag). The same 64-bit reconstruction issue applies here.
-
-### Bug 5: The Dhrystone runner doesn't parse Herve's console output
-
-The `run_herve()` function (line 170) only checks the exit code. It doesn't capture the Dhrystone output (Microseconds per run, Dhrystones per second) because the HTIF console output goes to `stdout` via `putchar()`. The `DhrystoneResult` struct has fields for these values, but they're never populated for Herve.
-
-**Fix:** Capture stdout during Herve execution and parse the Dhrystone output strings.
-
-### Bug 6: The Dhrystone runner doesn't initialize the `.tohost` section to zero
-
-The `rv_reset()` function clears `htif_tohost` and `htif_fromhost` in the ISS state, but the actual memory at `0x80001000` (the `.tohost` section) is not explicitly zeroed. The ELF loader zeroes BSS, but the `.tohost` section is placed before `.text` in the linker script and may not be in a PT_LOAD segment's BSS range.
-
-**Fix:** Explicitly zero the HTIF region after loading the ELF.
-
-### Bug 7: The `rv32_dpi_dhrystone.cpp` uses `rv_is_halted()` but the `rv_step()` loop may exit before the program is fully done
-
-The `rv_step()` function returns 0 when it hits an ECALL/EBREAK instruction (line 1279-1280). But the Dhrystone program uses `tohost_exit()` which writes to `tohost` and then enters an infinite loop (`while (1);`). The `rv_step()` loop will:
-1. Execute the `sw` to `tohost` → `halted = true`
-2. On the next iteration, `rv_step()` checks `halted` at line 1258 and returns 0
-3. The outer loop in `run_herve()` checks `rv_is_halted()` and exits
-
-This should work correctly.
-
-## [Types]
-
-No new types are needed. The existing `DhrystoneResult` struct in `rv32_dpi_dhrystone.cpp` is sufficient.
-
-## [Files]
-
-### Files to modify:
-
-1. **`dpi-riscv/sim/iss/rv32_dpi.c`** — Fix HTIF 64-bit write reconstruction in `write_u32()` and `handle_htif_write()`
-2. **`dpi-riscv/sim/iss/rv32_dpi_dhrystone.cpp`** — Fix the Dhrystone runner to:
-   - Zero the HTIF region after ELF loading
-   - Capture and parse Herve's console output for Dhrystone metrics
-   - Add proper error handling and diagnostics
-
-### Files to create:
-
-None.
-
-### Files to delete/move:
-
-None.
-
-## [Functions]
-
-### Modified functions in `rv32_dpi.c`:
-
-1. **`write_u32()`** (line 217) — Fix 64-bit HTIF tohost reconstruction:
-   - Add a static buffer to accumulate the two 32-bit halves of the 64-bit tohost value
-   - Only call `handle_htif_write()` when both halves have been received
-   - Handle the case where the upper word arrives before the lower word
-
-2. **`handle_htif_write()`** (line 159) — No changes needed, the function itself is correct. The bug is in how `write_u32()` calls it.
-
-3. **`rv_reset()`** (line 1214) — Add HTIF state reset for the new buffering mechanism.
-
-### Modified functions in `rv32_dpi_dhrystone.cpp`:
-
-1. **`run_herve()`** (line 170) — Add:
-   - Zero the HTIF region (`0x80001000` to `0x80001020`) after ELF loading
-   - Capture stdout output during execution (redirect to a string buffer)
-   - Parse the captured output for "Microseconds for one run" and "Dhrystones per Second"
-   - Populate `result.dhrystones_per_second` and `result.microseconds_per_run`
-
-2. **`main()`** (line 309) — Add better error reporting and diagnostics.
-
-## [Classes]
-
-No classes are modified. The codebase uses C-style structs and functions.
-
-## [Dependencies]
-
-No new dependencies. The existing `rv32_dpi.c` and `rv32_dpi_dhrystone.cpp` compile with standard C/C++ libraries.
-
-## [Testing]
-
-### Test plan:
-
-1. **Unit test: HTIF 64-bit write reconstruction** — Verify that two 32-bit `sw` writes to `HTIF_BASE` and `HTIF_BASE + 4` correctly reconstruct the 64-bit value regardless of write order.
-
-2. **Integration test: Dhrystone on Herve** — Run `make run_dhrystone` and verify:
-   - The program exits with code 0
-   - Console output contains "Microseconds for one run" and "Dhrystones per Second"
-   - The Dhrystones per Second value is reasonable (within an order of magnitude of Spike's result)
-
-3. **Regression test: riscv-tests** — Run `make run_riscv_tests` to verify that the HTIF fix doesn't break the existing 51 ISA tests.
-
-### Test files:
-
-- Existing: `dpi-riscv/tests/test.sh` — may need updating to include dhrystone test
-- Existing: `dpi-riscv/Makefile` — `run_dhrystone` target already exists
-
-## [Implementation Order]
-
-1. **Fix HTIF 64-bit write reconstruction in `rv32_dpi.c`** — This is the core bug. Add a static buffer to accumulate the two 32-bit halves of the 64-bit tohost value in `write_u32()`. Only call `handle_htif_write()` when both halves have been received.
-
-2. **Fix `rv_reset()` to clear HTIF buffer state** — Add initialization of the new HTIF buffer fields.
-
-3. **Fix `rv32_dpi_dhrystone.cpp` to zero HTIF region** — After loading the ELF, explicitly zero the memory at `0x80001000` to `0x80001020`.
-
-4. **Fix `rv32_dpi_dhrystone.cpp` to capture and parse Herve output** — Redirect stdout during Herve execution to a string buffer, then parse for Dhrystone metrics.
-
-5. **Build and test** — Run `make dhrystone.riscv && make rv32_dpi_dhrystone && make run_dhrystone` to verify the fix.
-
-6. **Regression test** — Run `make run_riscv_tests` to verify no regressions in the existing ISA test suite.
+Numbered steps showing the logical order:
+1. **Add `rv_load_elf()` to `rv32_dpi.c`** — implement the buffer-based ELF loader using the inline ELF structures already present. This is the core enabling change.
+2. **Update `rv32_dpi.h`** — add the `rv_load_elf` declaration.
+3. **Update `rv32_dpi_riscv_tests.cpp`** — change file discovery from `.bin` extension to `rv32*ui/m/uc*-p-` prefixes; replace memcpy-based loading with `rv_load_elf()` + `rv_reset()`.
+4. **Update `rv32_dpi_benchmark.cpp`** — apply the same changes as step 3.
+5. **Update `run_riscv_tests.sh`** — remove the objcopy conversion loop, remove bin directory references, point the test runner to `riscv-tests/isa/` directly.
+6. **Test** — run `make run_riscv_tests` from `dpi-riscv/` and verify all tests pass. Run `make run_benchmark` to confirm benchmark works with ELF files.

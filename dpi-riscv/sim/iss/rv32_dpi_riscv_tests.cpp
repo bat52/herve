@@ -53,9 +53,6 @@ extern "C" void dpi_mmio_write(int addr, int data) {
 // Test runner
 // -----------------------------------------------------------------------
 
-// riscv-tests link at 0x80000000
-#define TEST_BASE_ADDR 0x80000000u
-
 // Maximum instructions to execute before declaring a timeout
 #define MAX_INSTRUCTIONS 50000
 
@@ -74,27 +71,22 @@ struct TestResult {
 static uint8_t *global_ram = NULL;
 static size_t global_ram_size = 0;
 
-static int run_test(const uint8_t *binary, size_t binary_size,
+static int run_test(const uint8_t *elf_data, size_t elf_size,
                     const char *test_name, TestResult *result) {
     // Clear MMIO region for a fresh test state.
-    // We do NOT memset the entire 2.1GB RAM — that would be 100GB+ of
-    // writes across all 48 tests. Instead, we just overwrite the binary
-    // region and the BSS area below it. rv_reset() clears all registers.
     memset(mmio_region, 0, sizeof(mmio_region));
 
-    // Load binary at the correct offset (tests link at 0x80000000)
-    // Our RAM starts at address 0, so we need to place the binary at
-    // offset TEST_BASE_ADDR in our RAM.
-    if (TEST_BASE_ADDR + binary_size > global_ram_size) {
+    // Load ELF segments at their correct virtual addresses
+    uint32_t entry = rv_load_elf(elf_data, elf_size);
+    if (entry == 0) {
         result->passed = false;
-        result->reason = "binary too large for RAM";
+        result->reason = "ELF load failed";
         result->instructions_executed = 0;
         return -1;
     }
-    memcpy(&global_ram[TEST_BASE_ADDR], binary, binary_size);
 
-    // Reset PC to test entry point (also resets registers)
-    rv_reset(TEST_BASE_ADDR);
+    // Reset PC to ELF entry point (also resets registers)
+    rv_reset(entry);
 
     // Execute until ECALL/EBREAK or timeout
     int total_executed = 0;
@@ -199,7 +191,7 @@ static uint8_t *load_file(const char *path, size_t *size_out) {
 // -----------------------------------------------------------------------
 
 int main(int argc, char **argv) {
-    const char *test_dir = "../riscv-tests/isa/bin";
+    const char *test_dir = "../riscv-tests/isa";
     if (argc > 1) {
         test_dir = argv[1];
     }
@@ -212,23 +204,33 @@ int main(int argc, char **argv) {
     if (!dir) {
         fprintf(stderr, "ERROR: Cannot open directory '%s'\n", test_dir);
         fprintf(stderr, "Run from dpi-riscv/ directory, or specify path:\n");
-        fprintf(stderr, "  ./rv32_dpi_riscv_tests <path-to-bin-dir>\n");
+        fprintf(stderr, "  ./rv32_dpi_riscv_tests <path-to-elf-dir>\n");
         return 1;
     }
 
-    // Collect test files
+    // Collect test files — match the same prefixes that Spike uses
+    static const char *prefixes[] = {
+        "rv32ui-p-", "rv32um-p-", "rv32uc-p-", NULL
+    };
     struct dirent *entry;
     char test_names[256][256];
     int num_tests = 0;
 
     while ((entry = readdir(dir)) != NULL) {
-        // Match *.bin files
-        const char *ext = strrchr(entry->d_name, '.');
-        if (ext && strcmp(ext, ".bin") == 0) {
-            if (num_tests < 256) {
-                strncpy(test_names[num_tests], entry->d_name, 255);
-                test_names[num_tests][255] = '\0';
-                num_tests++;
+        // Skip directories and dump/hex files
+        if (entry->d_type == DT_DIR) continue;
+        const char *dot = strrchr(entry->d_name, '.');
+        if (dot && (strcmp(dot, ".dump") == 0 || strcmp(dot, ".hex") == 0)) continue;
+
+        // Match against known prefixes
+        for (int p = 0; prefixes[p] != NULL; p++) {
+            if (strncmp(entry->d_name, prefixes[p], strlen(prefixes[p])) == 0) {
+                if (num_tests < 256) {
+                    strncpy(test_names[num_tests], entry->d_name, 255);
+                    test_names[num_tests][255] = '\0';
+                    num_tests++;
+                }
+                break;
             }
         }
     }
@@ -246,11 +248,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("Found %d test binaries\n\n", num_tests);
+    printf("Found %d test ELF files\n\n", num_tests);
 
     // Allocate global RAM once — 2GB + 16MB to cover address 0x80000000
     // This avoids malloc/free thrashing for each test.
-    global_ram_size = (size_t)TEST_BASE_ADDR + (16u << 20); // 2GB + 16MB
+    global_ram_size = (size_t)0x80000000 + (16u << 20); // 2GB + 16MB
     printf("Allocating %zu MB of RAM...\n\n", global_ram_size / (1024 * 1024));
 
     // Initialize ISS once (allocates the big buffer)
@@ -269,19 +271,16 @@ int main(int argc, char **argv) {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", test_dir, test_names[i]);
 
-        size_t binary_size;
-        uint8_t *binary = load_file(path, &binary_size);
-        if (!binary) {
+        size_t elf_size;
+        uint8_t *elf_data = load_file(path, &elf_size);
+        if (!elf_data) {
             printf("  [SKIP] %s (cannot load)\n", test_names[i]);
             skipped++;
             continue;
         }
 
-        // Remove .bin extension for display
-        char display_name[256];
-        strncpy(display_name, test_names[i], 255);
-        char *dot = strrchr(display_name, '.');
-        if (dot) *dot = '\0';
+        // Use the filename directly (no extension to strip)
+        const char *display_name = test_names[i];
 
         TestResult result;
         result.name = display_name;
@@ -289,8 +288,8 @@ int main(int argc, char **argv) {
         result.reason = "unknown";
         result.instructions_executed = 0;
 
-        int ret = run_test(binary, binary_size, display_name, &result);
-        free(binary);
+        int ret = run_test(elf_data, elf_size, display_name, &result);
+        free(elf_data);
 
         if (ret == 0 && result.passed) {
             printf("  [PASS] %s (%d insn)\n", display_name, result.instructions_executed);
