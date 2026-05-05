@@ -2,10 +2,11 @@
 
 ## Overview
 
-This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using three workloads:
+This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using four workloads:
 1. The standard **riscv-tests** ISA test suite (rv32ui-p-*, rv32um-p-*, rv32uc-p-*)
 2. The **median** benchmark from riscv-tests benchmarks (HTIF-based)
 3. The **mm** (matrix multiply) benchmark from riscv-tests benchmarks (HTIF-based, requires soft-float)
+4. The **memcpy** benchmark from riscv-tests benchmarks (HTIF-based, integer-only)
 
 ### ISA Test Suite Results
 
@@ -39,6 +40,17 @@ This report compares the execution performance of **Herve** (a lightweight RV32I
 | **Tests passed** | **1/1** | 1/1 | — |
 | **Benchmark** | mm.riscv | mm.riscv | — |
 | **Soft-float** | Custom `softfloat.c` | Spike native | — |
+
+### memcpy Benchmark Results
+
+| Metric | Herve ISS | Spike | Speedup (Spike/Herve) |
+|--------|-----------|-------|----------------------|
+| **Total instructions** | 32,000 | 195,000 | — |
+| **Total time** | 0.000380 s | 2.939 s | **7,734×** |
+| **Overall IPS** | 84,311,478 | 66,349 | **1,271×** |
+| **Tests passed** | **1/1** | 1/1 | — |
+| **Benchmark** | memcpy.riscv | memcpy.riscv | — |
+| **Dependencies** | `string.h` (newlib-stubs) | Spike native | — |
 
 ---
 
@@ -152,6 +164,7 @@ This means the **speedup ratios** are somewhat inflated for Herve since it execu
 | rv32um-p-remu | 130 | 5,134 | 0.000002 | 0.070 | 83,762,887 | 73,343 | 35,000× |
 | **median.riscv** | **11,000** | **165,000** | **0.000114** | **2.335** | **96,590,360** | **70,664** | **20,482×** |
 | **mm.riscv** | **33,017,000** | **33,520,000** | **0.297** | **446.957** | **111,350,185** | **74,996** | **1,507×** |
+| **memcpy.riscv** | **32,000** | **195,000** | **0.000380** | **2.939** | **84,311,478** | **66,349** | **7,734×** |
 
 
 ## Analysis
@@ -248,11 +261,10 @@ The `run_spike_benchmark.sh` script supports a `--benchmark <elf>` flag for runn
 ```bash
 # From the dpi-riscv directory:
 
-# Build the median benchmark ELF
+# Build the benchmark ELFs
 make median.riscv
-
-# Build the mm benchmark ELF (requires softfloat.o and sync_stubs.o)
-make mm.riscv
+make mm.riscv          # requires softfloat.o and sync_stubs.o
+make memcpy.riscv
 
 # Build the HTIF benchmark runner
 make rv32_dpi_benchmark_htif
@@ -266,16 +278,17 @@ make run_benchmark_htif_csv
 # Run Spike benchmark (human-readable)
 make run_spike_benchmark_median
 make run_spike_benchmark_mm
+make run_spike_benchmark_memcpy
 
 # Run Spike benchmark (CSV)
 make run_spike_benchmark_median_csv
 make run_spike_benchmark_mm_csv
+make run_spike_benchmark_memcpy_csv
 
-# Full comparison (Herve vs Spike) for median
-make compare_benchmark_htif
-
-# Full comparison (Herve vs Spike) for mm
-make compare_benchmark_mm
+# Full comparison (Herve vs Spike)
+make compare_benchmark_htif    # median
+make compare_benchmark_mm      # mm
+make compare_benchmark_memcpy  # memcpy
 ```
 
 ### Makefile Targets
@@ -284,6 +297,7 @@ make compare_benchmark_mm
 |--------|-------------|
 | `median.riscv` | Build the median benchmark ELF from riscv-tests source |
 | `mm.riscv` | Build the mm (matrix multiply) benchmark ELF (requires softfloat.o, sync_stubs.o) |
+| `memcpy.riscv` | Build the memcpy benchmark ELF from riscv-tests source (integer-only, no extra libs) |
 | `softfloat.o` | Build the custom soft-float library for RV32 double-precision emulation |
 | `sync_stubs.o` | Build sync stubs for `__sync_fetch_and_add_4` |
 | `rv32_dpi_benchmark_htif` | Build the HTIF-aware Herve benchmark runner |
@@ -293,8 +307,11 @@ make compare_benchmark_mm
 | `run_spike_benchmark_median_csv` | Run median benchmark on Spike (CSV output) |
 | `run_spike_benchmark_mm` | Run mm benchmark on Spike |
 | `run_spike_benchmark_mm_csv` | Run mm benchmark on Spike (CSV output) |
+| `run_spike_benchmark_memcpy` | Run memcpy benchmark on Spike |
+| `run_spike_benchmark_memcpy_csv` | Run memcpy benchmark on Spike (CSV output) |
 | `compare_benchmark_htif` | Full Herve vs Spike comparison for HTIF benchmarks (median) |
 | `compare_benchmark_mm` | Full Herve vs Spike comparison for mm benchmark |
+| `compare_benchmark_memcpy` | Full Herve vs Spike comparison for memcpy benchmark |
 
 ---
 
