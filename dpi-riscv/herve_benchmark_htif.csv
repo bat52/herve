@@ -1,0 +1,3 @@
+test_name,passed,instructions,time_sec,ips,reason
+median.riscv,PASS,11000,0.000153,71820319,PASS (HTIF exit=0)
+TOTAL,PASS,11000,0.000153,71820319,1 passed, 0 failed, 0 skipped

@@ -1,119 +1,157 @@
 # Implementation Plan
 
-[Overview]
-Transition the riscv-tests validation suite from using objcopy-converted .bin files to executing the native ELF files directly, ensuring Herve runs the identical ELF binaries that Spike executes in run_spike_benchmark.sh.
+Add the `median` benchmark from `riscv-tests/benchmarks/` as an HTIF-based workload in the Herve vs Spike benchmark comparison pipeline.
 
-The existing workflow converts riscv-tests ELF binaries to flat .bin files via `riscv64-unknown-elf-objcopy -O binary`, then loads them at a fixed offset (0x80000000) into the ISS. Meanwhile, `run_spike_benchmark.sh` feeds the raw ELF files directly to Spike. This discrepancy means we're testing two different input formats. An in-memory ELF loader (`rv_load_elf`) has already been prototyped in the ISS core (`rv_init_elf` does file-based loading), but the standalone test runners (`rv32_dpi_riscv_tests.cpp` and `rv32_dpi_benchmark.cpp`) bypass it — they allocate a shared 2GB mmap buffer and load .bin files manually. The solution is to add a buffer-based ELF loader that writes into the pre-allocated RAM, then update the two test runners and the shell script to discover and load the same ELF files (bare files with no extension in `riscv-tests/isa/`) that Spike uses.
+The median benchmark uses a fundamentally different completion mechanism than the existing ISA tests: instead of setting `gp=1` and executing `EBREAK`, it writes to an HTIF `tohost` memory-mapped variable at address `0x80001000`. This requires a new benchmark runner that can detect HTIF exit signaling, plus a Makefile target to build the `median.riscv` ELF binary from source. The runner will integrate into the existing CSV-based comparison pipeline (`analyze_benchmark.py`) and will be accessible through new and updated Makefile targets.
+
+## Context and Background
+
+The existing benchmark infrastructure (`rv32_dpi_benchmark.cpp`, `run_spike_benchmark.sh`, `analyze_benchmark.py`) supports only ISA tests (rv32ui-p-\*, rv32um-p-\*, rv32uc-p-\*) that use `gp=1` + `EBREAK` for pass/fail signaling and require no runtime bootstrap.
+
+The riscv-tests benchmark suite (median, qsort, dhrystone, etc.) differs fundamentally:
+- **Completion**: Uses HTIF `tohost`/`fromhost` protocol — writes `(exit_code << 1) | 1` to address `0x80001000`
+- **Runtime**: Requires `_init` → `thread_entry` → `main()` bootstrap via `crt.S`, plus `syscalls.c` for HTIF syscalls and `printf` support
+- **CSR access**: Uses `mcycle`/`minstret` CSRs for `setStats()` performance counting
+- **Build**: Must be compiled from C source using the RISC-V GCC toolchain; no pre-built binaries exist
+
+The plan adds:
+1. A Makefile target to build `median.riscv` from the riscv-tests sources
+2. A new HTIF-aware benchmark runner `rv32_dpi_benchmark_htif.cpp`
+3. Extensions to `run_spike_benchmark.sh` to run benchmark ELFs on Spike
+4. New Makefile targets to build, run, and compare the median benchmark
+5. Documentation updates
 
 [Types]
-No new types; the existing `struct elf32_ehdr` and `struct elf32_phdr` in `rv32_dpi.c` are reused.
+One new struct type in the HTIF benchmark runner to store per-benchmark results.
+
+```
+// in sim/iss/rv32_dpi_benchmark_htif.cpp
+struct HtifBenchmarkResult {
+    std::string name;
+    bool passed;
+    int instructions;
+    double time_sec;
+    double ips;
+    std::string reason;
+    int exit_code;       // exit code extracted from tohost (0 = pass)
+};
+```
+
+No new types in the ISS core (`rv32_dpi.c` or `rv32_dpi.h`) — HTIF detection is done entirely in the benchmark runner by inspecting the RAM buffer after execution.
 
 [Files]
+Two new files, four modified files.
 
-Single sentence describing file modifications.
+### New Files
 
-Detailed breakdown:
-- **`dpi-riscv/sim/iss/rv32_dpi.h`** — modified
-  - Add declaration: `uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size);`
-  - This is a buffer-based ELF loader that works with a pre-allocated RAM buffer.
+- **`dpi-riscv/sim/iss/rv32_dpi_benchmark_htif.cpp`** — HTIF-based benchmark runner.
+  - Discovers `.riscv` ELF files in a configurable benchmark directory (default: the project root, matching `median.riscv`)
+  - For each benchmark:
+    1. Loads the ELF via `rv_load_elf()` into pre-allocated RAM
+    2. Resets PC to ELF entry point
+    3. Runs `rv_step(1000)` in a loop, measuring wall-clock time
+    4. After each batch, reads 8 bytes at RAM offset `0x80001000` (the `tohost` address from `test.ld`)
+    5. If `tohost & 1 == 1`, the benchmark has exited; extracts `exit_code = tohost >> 1`
+    6. If `exit_code == 0`, benchmark passes; otherwise fails with the exit code
+    7. Also detects stale PC (infinite loop) and instruction limit as timeout
+  - Outputs human-readable and CSV results matching the same format as `rv32_dpi_benchmark.cpp`
+  - CSV columns: `test_name,passed,instructions,time_sec,ips,reason`
 
-- **`dpi-riscv/sim/iss/rv32_dpi.c`** — modified
-  - Implement `rv_load_elf(const uint8_t *elf_data, size_t elf_size)`:
-    - Takes a pointer to an ELF file loaded into memory by the caller.
-    - Parses the ELF header and program headers directly from the buffer.
-    - Loads each `PT_LOAD` segment at its `p_vaddr` into the existing `memory[]` buffer.
-    - Zero-fills BSS (`p_memsz > p_filesz`).
-    - Returns the entry point (`e_entry`) on success, 0 on failure.
-    - Does NOT allocate or free memory — assumes `memory` is already set up (via `rv_init()`, `rv_set_ram()`, or a prior `rv_init_elf()` call).
-    - Does NOT call `fopen`/`fread` — operates purely in memory.
-    - Validates: ELF magic, 32-bit, little-endian, RISC-V machine type.
+### Modified Files
 
-- **`dpi-riscv/sim/iss/rv32_dpi_riscv_tests.cpp`** — modified
-  - **File discovery**: change from scanning `*.bin` files to scanning for files matching the same patterns as `run_spike_benchmark.sh`:
-    - Prefixes: `rv32ui-p-`, `rv32um-p-`, `rv32uc-p-`
-    - Exclude directories, files ending in `.dump` or `.hex`
-    - Filter by trying `fopen()` (same as current) — if the file opens and passes the prefix/extension filter, include it.
-  - **Loading**: replace `load_file()` + `memcpy(&global_ram[TEST_BASE_ADDR], binary, binary_size)` with `load_file()` + `rv_load_elf(binary, binary_size)`, then `rv_reset(entry_point)`.
-  - Remove the `TEST_BASE_ADDR` constant (no longer needed since ELF segments self-describe their addresses).
-  - Change the default test directory from `../riscv-tests/isa/bin` to `../riscv-tests/isa`.
-  - The `mmap`/`rv_set_ram` setup remains unchanged (the 2GB pre-allocated buffer).
+- **`dpi-riscv/Makefile`** — Add build and run targets:
+  - **build target `median.riscv`**: Compiles the median benchmark using the RISC-V toolchain, linking with `riscv-tests/benchmarks/common/crt.S`, `syscalls.c`, `util.h`, and `riscv-tests/env/encoding.h`. Uses `-march=rv32im_zicsr -mabi=ilp32` for RV32 compatibility with CSR access.
+  - **build target `rv32_dpi_benchmark_htif`**: Compiles the HTIF runner from `sim/iss/rv32_dpi_benchmark_htif.cpp` and `sim/iss/rv32_dpi.c`.
+  - **target `run_benchmark_htif`**: Builds and runs the HTIF runner — runs median.riscv on Herve.
+  - **target `run_spike_benchmark_median`**: Runs the median benchmark binary on Spike via `run_spike_benchmark.sh --benchmark median.riscv`.
+  - **target `compare_benchmark_htif`**: Compares Herve and Spike CSV outputs using `analyze_benchmark.py`.
+  - **clean target** update: Add `median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif`.
 
-- **`dpi-riscv/sim/iss/rv32_dpi_benchmark.cpp`** — modified
-  - Identical changes to the file-discovery and loading logic as `rv32_dpi_riscv_tests.cpp`.
-  - Change default directory from `../riscv-tests/isa/bin` to `../riscv-tests/isa`.
-  - Replace manual binary loading with `rv_load_elf()` + `rv_reset(entry_point)`.
-  - Remove `TEST_BASE_ADDR`.
+- **`dpi-riscv/tests/run_spike_benchmark.sh`** — Add benchmark mode:
+  - Accept `--benchmark <path-to-elf>` flag to run a single benchmark ELF on Spike
+  - Use HTIF exit protocol to determine pass/fail:
+    - Spike should crash or loop on HTIF exit, but we can check tohost via the log or instruction count
+    - Alternative: check that Spike ran without crashing (similar to existing pattern but less strict since benchmarks are longer-running)
+  - Output CSV in the same format as ISA test runs (`test_name,passed,instructions,time_sec,ips,reason`)
+  - Separate ISPC (instructions per cycle) measurement not needed — use `--log-commits` as before
 
-- **`dpi-riscv/tests/run_riscv_tests.sh`** — modified
-  - **Remove** the ELF → binary conversion loop (lines 70-79):
-    ```bash
-    for pattern in rv32ui-p- rv32um-p- rv32uc-p-; do
-        for elf in "$RISCV_TESTS_DIR/isa/$pattern"*; do
-            [ -f "$elf" ] || continue
-            case "$elf" in *.dump|*.hex) continue ;; esac
-            base="$(basename "$elf")"
-            riscv64-unknown-elf-objcopy -O binary "$elf" "$TEST_BIN_DIR/$base.bin"
-        done
-    done
-    ```
-  - **Remove** the `TEST_BIN_DIR` variable and the `mkdir -p "$TEST_BIN_DIR"` line.
-  - **Remove** the `.bin` file count check (`NUM_BINS`).
-  - **Change** the test runner invocation from:
-    ```bash
-    ./rv32_dpi_riscv_tests "$TEST_BIN_DIR"
-    ```
-    to:
-    ```bash
-    ./rv32_dpi_riscv_tests "$RISCV_TESTS_DIR/isa"
-    ```
-  - The build step (`make XLEN=32 ...`) remains unchanged — it produces the bare ELF files in `riscv-tests/isa/`.
+- **`dpi-riscv/docs/benchmark_results.md`** — Add median benchmark section documenting the HTIF methodology and results.
+
+- **`dpi-riscv/docs/isa_support.md`** — Add note about benchmark support (HTIF tohost detection) if this file documents such capabilities.
+
+### Files NOT modified
+
+- `rv32_dpi.c` / `rv32_dpi.h` — No changes to the ISS core. HTIF detection is done externally in the runner.
+- `rv32_dpi_benchmark.cpp` — Left untouched. The existing ISA test runner continues to work as before.
+- `analyze_benchmark.py` — No changes needed. It already compares CSV files generically, matching test names between two CSV inputs.
 
 [Functions]
+One new function definition in the HTIF benchmark runner.
 
-Single sentence describing function modifications.
+### New Functions
 
-Detailed breakdown:
-- **New function**: `uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size)` in `rv32_dpi.c`
-  - Signature: `uint32_t rv_load_elf(const uint8_t *elf_data, size_t elf_size)`
-  - File: `dpi-riscv/sim/iss/rv32_dpi.c`
-  - Purpose: In-memory ELF loader that writes PT_LOAD segments into the existing ISS RAM buffer at their virtual addresses and returns the entry point.
-  - Implementation: Reuses the ELF-parsing logic from `rv_init_elf()` but reads from a buffer instead of a file. No malloc/free.
+- **`dpi-riscv/sim/iss/rv32_dpi_benchmark_htif.cpp :: main()`** — Standard entry point.
+  - Parses `--csv` flag and optional benchmark directory path
+  - Discovers `.riscv` benchmark ELF files in the directory
+  - For each, loads ELF, runs measurement loop, checks HTIF tohost
+  - Outputs results
 
-- **Modified function**: `main()` in `rv32_dpi_riscv_tests.cpp`
-  - Replace `.bin` extension filter with prefix-based filter matching `rv32ui-p-`, `rv32um-p-`, `rv32uc-p-`.
-  - Use `rv_load_elf()` after loading file into memory, then `rv_reset(entry_point)`.
-  - Remove `TEST_BASE_ADDR`.
+- **`dpi-riscv/sim/iss/rv32_dpi_benchmark_htif.cpp :: run_htif_benchmark()`** (helper) — Runs a single HTIF benchmark:
+  - Signature: `static int run_htif_benchmark(const uint8_t *elf_data, size_t elf_size, const char *test_name, HtifBenchmarkResult *result)`
+  - Loads ELF, resets ISS, runs rv_step batches, measures time, checks tohost at offset 0x80001000
+  - Returns 0 on clean exit (HTIF detected), -1 on timeout/error
 
-- **Modified function**: `run_test()` in `rv32_dpi_riscv_tests.cpp`
-  - Remove the `memcpy` at fixed offset. Instead, the caller loads ELF via `rv_load_elf()` and passes the entry point.
-  - Keep the execution loop and gp-checking logic unchanged.
+- **`dpi-riscv/sim/iss/rv32_dpi_benchmark_htif.cpp :: load_file()`** (helper) — Identical to the version in `rv32_dpi_benchmark.cpp`: loads a file into a malloc'd buffer.
 
-- **Modified function**: `main()` in `rv32_dpi_benchmark.cpp`
-  - Same changes as `rv32_dpi_riscv_tests.cpp::main()`.
+### Modified Functions
 
-- **Modified function**: `run_test()` in `rv32_dpi_benchmark.cpp`
-  - Same changes as `rv32_dpi_riscv_tests.cpp::run_test()`.
+None. The ISS core is unchanged.
 
 [Classes]
-
-No class modifications — the codebase is C/C++ with no C++ classes beyond structs.
+No classes are modified. Both the existing codebase and the new file use C and C++ (with free functions, not class methods).
 
 [Dependencies]
+No new external dependencies. The HTIF benchmark runner uses only standard C/C++ headers already in use:
+- `rv32_dpi.h` (ISS API — already exists)
+- Standard headers: `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<dirent.h>`, `<sys/stat.h>`, `<sys/mman.h>`, `<unistd.h>`, `<chrono>`, `<vector>`, `<string>`, `<algorithm>`, `<cmath>`
 
-No new dependencies. The ELF structures (`struct elf32_ehdr`, `struct elf32_phdr`) and constants (`EM_RISCV`, `PT_LOAD`, etc.) are already defined inline in `rv32_dpi.c`.
+The `median.riscv` build target depends on the RISC-V GCC toolchain (`riscv64-unknown-elf-gcc` with multilib support for RV32), which must already be installed (it's a prerequisite for building firmware).
 
 [Testing]
+The new benchmark runner and build target must be verified individually and as part of the pipeline.
 
-The existing test framework (`test.sh` → `run_riscv_tests`) validates the change end-to-end. After modification, running `make run_riscv_tests` in `dpi-riscv/` must produce the same pass/fail results as before (all ~48 tests should pass). Running `make run_benchmark_csv` and `make run_spike_benchmark_csv` should produce CSV files referencing the same test names. Manual verification: `readelf -h` can confirm the ELFs Spike runs are the same files Herve will now load.
+### Manual Verification Steps
+
+1. **Build the median benchmark**: `make median.riscv` — should produce `median.riscv` ELF binary
+2. **Run on Herve**: `make run_benchmark_htif` — should execute the median benchmark and output results
+3. **Run on Spike**: `make run_spike_benchmark_median` — should run median.riscv on Spike and output CSV
+4. **Compare**: `make compare_benchmark_htif` — should show side-by-side comparison of Herve vs Spike
+
+### Pass Criteria
+
+- Herve ISS successfully runs the median benchmark to completion (detects HTIF tohost write)
+- Herve reports PASS for the median benchmark (exit code 0 → verify_data matches)
+- Spike also runs and reports PASS
+- The comparison script shows both results
+
+### Regression Tests
+
+- `make run_standalone` should still pass (existing standalone test)
+- `make run_riscv_tests` should still pass (existing ISA test runner)
+- `make run_benchmark` should still work (existing ISA benchmark runner)
+- `bash tests/test.sh` should pass all applicable tests
 
 [Implementation Order]
+The implementation must follow this dependency order:
 
-Single sentence describing the implementation sequence.
+1. **Build `median.riscv` binary** — Add Makefile target to compile the median benchmark from riscv-tests sources. Verify the binary exists and can be run on Spike as a sanity check.
 
-Numbered steps showing the logical order:
-1. **Add `rv_load_elf()` to `rv32_dpi.c`** — implement the buffer-based ELF loader using the inline ELF structures already present. This is the core enabling change.
-2. **Update `rv32_dpi.h`** — add the `rv_load_elf` declaration.
-3. **Update `rv32_dpi_riscv_tests.cpp`** — change file discovery from `.bin` extension to `rv32*ui/m/uc*-p-` prefixes; replace memcpy-based loading with `rv_load_elf()` + `rv_reset()`.
-4. **Update `rv32_dpi_benchmark.cpp`** — apply the same changes as step 3.
-5. **Update `run_riscv_tests.sh`** — remove the objcopy conversion loop, remove bin directory references, point the test runner to `riscv-tests/isa/` directly.
-6. **Test** — run `make run_riscv_tests` from `dpi-riscv/` and verify all tests pass. Run `make run_benchmark` to confirm benchmark works with ELF files.
+2. **Create `rv32_dpi_benchmark_htif.cpp`** — Implement the HTIF-aware benchmark runner. Build and test against `median.riscv` on Herve ISS.
+
+3. **Update `run_spike_benchmark.sh`** — Add `--benchmark` flag support for running a single benchmark ELF on Spike.
+
+4. **Update `Makefile`** — Add all new targets (`run_benchmark_htif`, `run_spike_benchmark_median`, `compare_benchmark_htif`, clean entries).
+
+5. **Update documentation** — Update `benchmark_results.md` and `isa_support.md` with median benchmark methodology and results.
+
+6. **Run full comparison** — Execute Herve vs Spike median benchmark comparison and verify the pipeline end-to-end.

@@ -107,3 +107,14 @@ A Verilator test harness (`sim/harness/rv32_dpi_muldiv_tb.cpp`) provides the sam
 
 Tests verified: `add`, `addi`, `and`, `andi`, `auipc`, `beq`, `bge`, `bgeu`, `blt`, `bltu`, `bne`, `fence_i`, `jal`, `jalr`, `lb`, `lbu`, `lh`, `lhu`, `lui`, `lw`, `or`, `ori`, `sb`, `sh`, `sll`, `slli`, `slt`, `slti`, `sltiu`, `sltu`, `sra`, `srai`, `srl`, `srli`, `sub`, `sw`, `xor`, `xori`, `simple`, `div`, `divu`, `mul`, `mulh`, `mulhsu`, `mulhu`, `rem`, `remu`, `rvc`
 
+### HTIF Benchmark Support
+
+The ISS now supports **riscv-tests benchmark programs** (median, dhrystone, multiply, etc.) that use the **HTIF (Host-Target Interface)** protocol for completion signaling, rather than the `gp=1 + EBREAK` convention used by ISA tests.
+
+- **HTIF tohost address:** `0x80001000` (defined by `test.ld` linker script)
+- **Completion signal:** Write `(exit_code << 1) | 1` to `tohost` (`uint64_t` at `0x80001000`)
+- **Detection:** The HTIF-aware runner (`rv32_dpi_benchmark_htif.cpp`) peeks at RAM after each batch of `rv_step(1000)` calls
+- **No ISS changes needed:** HTIF detection is done externally by the benchmark runner, not in the core ISS (`rv32_dpi.c`)
+
+**Status:** ✅ Median benchmark supported via `make run_benchmark_htif`
+

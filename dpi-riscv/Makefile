@@ -257,7 +257,39 @@ run_spike_benchmark_csv:
 compare_benchmark: rv32_dpi_benchmark
 	python3 tests/analyze_benchmark.py
 
+# ---- HTIF-based benchmark (riscv-tests benchmarks) ----
+RISCV_TESTS_DIR ?= ../riscv-tests
+BMARKS_DIR = $(RISCV_TESTS_DIR)/benchmarks
+COMMON_DIR = $(BMARKS_DIR)/common
+ENV_DIR = $(RISCV_TESTS_DIR)/env
+
+median.riscv: $(BMARKS_DIR)/median/median_main.c $(BMARKS_DIR)/median/median.c $(BMARKS_DIR)/median/median.h $(BMARKS_DIR)/median/dataset1.h $(COMMON_DIR)/crt.S $(COMMON_DIR)/syscalls.c $(COMMON_DIR)/util.h $(COMMON_DIR)/test.ld $(ENV_DIR)/encoding.h
+	$(RISCV_PREFIX)-gcc -march=rv32im_zicsr -mabi=ilp32 -DPREALLOCATE=1 -static -std=gnu99 -O2 -ffast-math -fno-common -fno-builtin-printf -nostdlib -nostartfiles \
+	  -I$(BMARKS_DIR) -I$(BMARKS_DIR)/median -I$(COMMON_DIR) -I$(ENV_DIR) -Inewlib-stubs \
+	  -T $(COMMON_DIR)/test.ld \
+	  -o $@ $(BMARKS_DIR)/median/median_main.c $(BMARKS_DIR)/median/median.c $(COMMON_DIR)/crt.S $(COMMON_DIR)/syscalls.c -lgcc
+
+rv32_dpi_benchmark_htif: sim/iss/rv32_dpi_benchmark_htif.cpp sim/iss/rv32_dpi.c
+	g++ -std=c++11 -I./sim/iss -I. -O2 -o $@ sim/iss/rv32_dpi_benchmark_htif.cpp sim/iss/rv32_dpi.c
+
+run_benchmark_htif: median.riscv rv32_dpi_benchmark_htif
+	./rv32_dpi_benchmark_htif
+
+run_benchmark_htif_csv: median.riscv rv32_dpi_benchmark_htif
+	./rv32_dpi_benchmark_htif --csv
+
+run_spike_benchmark_median: median.riscv
+	bash tests/run_spike_benchmark.sh --benchmark median.riscv
+
+run_spike_benchmark_median_csv: median.riscv
+	bash tests/run_spike_benchmark.sh --benchmark median.riscv --csv
+
+compare_benchmark_htif: rv32_dpi_benchmark_htif median.riscv
+	./rv32_dpi_benchmark_htif --csv > herve_benchmark_htif.csv
+	bash tests/run_spike_benchmark.sh --benchmark median.riscv --csv > spike_benchmark_htif.csv
+	python3 tests/analyze_benchmark.py herve_benchmark_htif.csv spike_benchmark_htif.csv
+
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif
 
 

@@ -2,17 +2,23 @@
 #
 # run_spike_benchmark.sh — Benchmark RISC-V tests on Spike simulator.
 #
-# This script runs each riscv-tests ELF binary through Spike, measures
+# This script runs riscv-tests ELF binaries through Spike, measures
 # execution time, and outputs CSV for comparison with Herve.
 #
+# Supports two modes:
+#   1. ISA test suite mode (default): runs all rv32ui-p-*, rv32um-p-*, rv32uc-p-* tests
+#   2. Single benchmark mode (--benchmark): runs a single benchmark ELF (e.g. median.riscv)
+#
 # Usage:
-#   ./tests/run_spike_benchmark.sh                    # default: ../riscv-tests/isa
-#   ./tests/run_spike_benchmark.sh /path/to/isa/dir   # custom path
-#   ./tests/run_spike_benchmark.sh --csv              # CSV only
+#   ./tests/run_spike_benchmark.sh                              # default: ../riscv-tests/isa
+#   ./tests/run_spike_benchmark.sh /path/to/isa/dir             # custom path
+#   ./tests/run_spike_benchmark.sh --csv                        # CSV only
+#   ./tests/run_spike_benchmark.sh --benchmark <elf>            # single benchmark ELF
+#   ./tests/run_spike_benchmark.sh --benchmark <elf> --csv      # single benchmark, CSV
 #
 # Prerequisites:
 #   - spike in PATH (RISC-V ISA simulator)
-#   - riscv-tests ELF binaries built in ../riscv-tests/isa/
+#   - riscv-tests ELF binaries built in ../riscv-tests/isa/ (for ISA mode)
 #
 
 set -euo pipefail
@@ -23,10 +29,12 @@ RISCV_TESTS_DIR="$(cd "$PROJECT_DIR/../riscv-tests" 2>/dev/null && pwd || echo "
 ISA_DIR="$RISCV_TESTS_DIR/isa"
 
 CSV_MODE=false
+BENCHMARK_ELF=""
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --csv) CSV_MODE=true; shift ;;
+        --benchmark) BENCHMARK_ELF="$2"; shift 2 ;;
         *) POSITIONAL+=("$1"); shift ;;
     esac
 done
@@ -41,6 +49,73 @@ if ! command -v spike &>/dev/null; then
     exit 1
 fi
 
+# -----------------------------------------------------------------------
+# Single benchmark mode (--benchmark <elf>)
+# -----------------------------------------------------------------------
+if [[ -n "$BENCHMARK_ELF" ]]; then
+    if [[ ! -f "$BENCHMARK_ELF" ]]; then
+        echo "ERROR: Benchmark ELF not found: $BENCHMARK_ELF" >&2
+        exit 1
+    fi
+
+    test_name="$(basename "$BENCHMARK_ELF")"
+
+    if ! $CSV_MODE; then
+        echo "=== Spike Benchmark (single) ==="
+        echo ""
+        echo "Benchmark ELF: $BENCHMARK_ELF"
+        echo ""
+    fi
+
+    # Run spike with log-commits to get instruction count
+    # Spike exits with non-zero for bare-metal ELFs that use EBREAK or HTIF,
+    # so we ignore the exit code and parse the log.
+    log_file=$(mktemp /tmp/spike_bench_XXXXXX.log)
+    set +e
+    exec 3>&1 4>&2
+    spike_time=$( { time spike --isa=rv32imc --log-commits "$BENCHMARK_ELF" > "$log_file" 2>&1; } 2>&1 )
+    spike_exit=$?
+    set -e
+
+    # Parse wall-clock time from `time` output
+    real_sec=$(echo "$spike_time" | grep "^real" | awk '{print $2}' | \
+        sed 's/m/ /' | sed 's/s//' | awk '{if (NF==2) print $1*60+$2; else print $1}')
+
+    # Parse instruction count from log-commits
+    insn_count=$(grep -c "core   0:" "$log_file" 2>/dev/null || echo 0)
+
+    rm -f "$log_file"
+
+    # Determine pass/fail: if spike produced any committed instructions, consider it PASS
+    if [[ $insn_count -gt 0 ]]; then
+        status="PASS"
+    else
+        status="FAIL"
+    fi
+
+    ips=$(echo "$insn_count $real_sec" | awk '{if ($2 > 0) printf "%.0f", $1/$2; else print "0"}')
+
+    if $CSV_MODE; then
+        echo "test_name,passed,instructions,time_sec,ips,reason"
+        echo "$test_name,$status,$insn_count,$real_sec,$ips,"
+        echo "TOTAL,$status,$insn_count,$real_sec,$ips,1 test"
+    else
+        printf "  [%s] %-40s %6d insn  %8.4f s  %12s IPS\n" \
+            "$status" "$test_name" "$insn_count" "$real_sec" "$ips"
+        echo ""
+        echo "========================================"
+        echo "  Total instructions: $insn_count"
+        printf "  Total time:         %.4f s\n" "$real_sec"
+        echo "  Overall IPS:        $ips"
+        echo "========================================"
+    fi
+
+    exit 0
+fi
+
+# -----------------------------------------------------------------------
+# ISA test suite mode (default)
+# -----------------------------------------------------------------------
 if [[ ! -d "$ISA_DIR" ]]; then
     echo "ERROR: ISA directory not found: $ISA_DIR" >&2
     exit 1

@@ -67,3 +67,5 @@ dpi-riscv/rv32_dpi_riscv_tests
 dpi-riscv/rv32_dpi_riscv_tests_isa
 dpi-riscv/rv32_dpi_benchmark
 dpi-riscv/rv32_dpi_elf_test
+dpi-riscv/median.riscv
+dpi-riscv/rv32_dpi_benchmark_htif

@@ -2,7 +2,11 @@
 
 ## Overview
 
-This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using the standard **riscv-tests** ISA test suite as the workload.
+This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using two workloads:
+1. The standard **riscv-tests** ISA test suite (rv32ui-p-*, rv32um-p-*, rv32uc-p-*)
+2. The **median** benchmark from riscv-tests benchmarks (HTIF-based)
+
+### ISA Test Suite Results
 
 | Metric | Herve ISS | Spike | Speedup (Spike/Herve) |
 |--------|-----------|-------|----------------------|
@@ -13,6 +17,16 @@ This report compares the execution performance of **Herve** (a lightweight RV32I
 | **Geometric mean speedup** | — | — | **16,929×** |
 | **Min speedup** | — | — | 463× |
 | **Max speedup** | — | — | 132,000× |
+
+### HTIF Benchmark Results
+
+| Metric | Herve ISS | Spike | Speedup (Spike/Herve) |
+|--------|-----------|-------|----------------------|
+| **Total instructions** | 11,000 | 165,000 | — |
+| **Total time** | 0.000114 s | 2.335 s | **20,482×** |
+| **Overall IPS** | 96,491,228 | 70,664 | **1,365×** |
+| **Tests passed** | **1/1** | 1/1 | — |
+| **Benchmark** | median.riscv | median.riscv | — |
 
 ---
 
@@ -124,8 +138,8 @@ This means the **speedup ratios** are somewhat inflated for Herve since it execu
 | rv32um-p-mulhu | 493 | 5,497 | 0.000177 | 0.082 | 2,788,351 | 67,037 | 463× |
 | rv32um-p-rem | 130 | 5,134 | 0.000002 | 0.075 | 63,260,341 | 68,453 | 37,500× |
 | rv32um-p-remu | 130 | 5,134 | 0.000002 | 0.070 | 83,762,887 | 73,343 | 35,000× |
+| **median.riscv** | **11,000** | **165,000** | **0.000114** | **2.335** | **96,590,360** | **70,664** | **20,482×** |
 
----
 
 ## Analysis
 
@@ -186,7 +200,79 @@ python3 tests/analyze_benchmark.py herve_benchmark.csv spike_benchmark.csv
 
 ---
 
+## HTIF-Based Benchmark Support
+
+In addition to the ISA test suite, the benchmark pipeline now supports **riscv-tests benchmark programs** that use the **HTIF (Host-Target Interface)** protocol for completion signaling.
+
+### HTIF Protocol
+
+riscv-tests benchmarks (median, dhrystone, multiply, etc.) signal completion by writing to a `tohost` memory-mapped register:
+
+- `tohost` is a `volatile uint64_t` at address `0x80001000` (defined by `test.ld`)
+- Benchmark writes `(exit_code << 1) | 1` to signal completion
+- `exit_code == 0` means PASS, non-zero means FAIL
+
+### Herve HTIF Runner
+
+The `rv32_dpi_benchmark_htif` runner (`sim/iss/rv32_dpi_benchmark_htif.cpp`):
+1. Discovers `.riscv` ELF files in the benchmark directory
+2. Loads each ELF via `rv_load_elf()` at its linked address
+3. Runs `rv_step(1000)` in a loop, checking `tohost` at `0x80001000` after each batch
+4. Detects HTIF completion by reading `uint64_t` at `RAM[0x80001000]`, checking bit 0
+5. Extracts exit code as `tohost >> 1`
+6. Outputs human-readable and CSV format matching the existing benchmark runner
+
+### Spike HTIF Runner
+
+The `run_spike_benchmark.sh` script supports a `--benchmark <elf>` flag for running single benchmark ELFs on Spike:
+1. Runs `spike --isa=rv32imc --log-commits <elf>`
+2. Measures wall-clock time via shell `time`
+3. Counts instructions from `--log-commits` output
+4. Outputs CSV in the same format as ISA test runs
+
+### How to Reproduce
+
+```bash
+# From the dpi-riscv directory:
+
+# Build the median benchmark ELF
+make median.riscv
+
+# Build the HTIF benchmark runner
+make rv32_dpi_benchmark_htif
+
+# Run Herve benchmark (human-readable)
+make run_benchmark_htif
+
+# Run Herve benchmark (CSV)
+make run_benchmark_htif_csv
+
+# Run Spike benchmark (human-readable)
+make run_spike_benchmark_median
+
+# Run Spike benchmark (CSV)
+make run_spike_benchmark_median_csv
+
+# Full comparison (Herve vs Spike)
+make compare_benchmark_htif
+```
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `median.riscv` | Build the median benchmark ELF from riscv-tests source |
+| `rv32_dpi_benchmark_htif` | Build the HTIF-aware Herve benchmark runner |
+| `run_benchmark_htif` | Run all `.riscv` benchmarks on Herve |
+| `run_benchmark_htif_csv` | Run all `.riscv` benchmarks on Herve (CSV output) |
+| `run_spike_benchmark_median` | Run median benchmark on Spike |
+| `run_spike_benchmark_median_csv` | Run median benchmark on Spike (CSV output) |
+| `compare_benchmark_htif` | Full Herve vs Spike comparison for HTIF benchmarks |
+
+---
+
 ## Known Issues
 
 1. **Instruction count mismatch** — Herve and Spike report different instruction counts for the same tests due to Spike's platform initialization overhead. This is expected behavior.
 2. **Timer resolution** — Herve's execution times are extremely small (microseconds), approaching the resolution limits of `std::chrono::high_resolution_clock`. For more accurate timing on larger workloads, the benchmark suite should be extended with the riscv-tests benchmark programs (dhrystone, median, multiply, etc.) which execute millions of instructions.
+3. **HTIF benchmark ELF size** — The median benchmark ELF is ~2.15 GB in virtual address space due to the mmap allocation at 0x80000000. This is normal for the Herve ISS which uses `MAP_NORESERVE` to avoid actual memory consumption.
