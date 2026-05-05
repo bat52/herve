@@ -1,6 +1,6 @@
 # Herve
 
-Herve is a lightweight **RV32IM[C] Instruction Set Simulator (ISS)** written in C. It is designed for fast functional simulation of RISC-V programs, with direct integration into Verilog/SystemVerilog testbenches via **Verilator DPI-C** and **Icarus Verilog VPI**.
+Herve is a lightweight **RV32IM[C] Instruction Set Simulator (ISS)** written in C. It is designed for fast functional simulation of RISC-V programs, with direct integration into Verilog/SystemVerilog testbenches via **Verilator DPI-C**, **Icarus Verilog VPI**, and **ModelSim DPI-C**.
 
 The name "Herve" is a French person's name that happens to have similar pronunciation to "RV", the shorthand for RISC-V.
 
@@ -9,6 +9,7 @@ The name "Herve" is a French person's name that happens to have similar pronunci
 - **RV32IM[C] ISA support** — Base integer (I), multiply/divide (M), and compressed (C) extensions
 - **Verilator DPI-C integration** — Embed the ISS directly into RTL simulations
 - **Icarus Verilog VPI integration** — VPI system functions for Icarus-based simulations
+- **ModelSim DPI-C integration** — DPI-C shared library for ModelSim (Intel FPGA Edition) simulations
 - **Standalone mode** — Run RISC-V programs without any HDL simulator or RISC-V toolchain
 - **AHB-Lite GPIO testcase** — Full example of bus-level peripheral integration
 - **Interrupt support** — External interrupt handling via DPI-C
@@ -58,6 +59,16 @@ sudo apt install verilator
 sudo apt install iverilog
 ```
 
+### ModelSim (optional, for ModelSim DPI-C simulation)
+
+ModelSim Intel FPGA Starter Edition is a free 32-bit application. On 64-bit systems, install 32-bit compatibility libraries:
+
+```bash
+sudo bash dpi-riscv/tests/install_modelsim_deps.sh
+```
+
+See [ModelSim Documentation](dpi-riscv/docs/modelsim.md) for detailed setup and usage instructions.
+
 ### Spike (optional, for benchmarking)
 
 The official RISC-V ISA simulator, used as a reference for performance comparison:
@@ -70,7 +81,7 @@ This installs Spike to `/opt/riscv` and adds it to your `PATH`.
 
 ## Verilog-DPI Integration
 
-Herve can be embedded into RTL testbenches via DPI-C (Verilator) or VPI (Icarus).
+Herve can be embedded into RTL testbenches via DPI-C (Verilator), VPI (Icarus), or DPI-C (ModelSim).
 
 ### Verilator DPI-C
 
@@ -107,6 +118,49 @@ cd dpi-riscv
 make firmware
 make run_icarus
 ```
+
+### ModelSim DPI-C
+
+ModelSim supports DPI-C import/export natively. A dedicated DPI-C bridge library (`sim/modelsim/rv32_dpi_mti.c`) provides wrapper functions for ISS integration:
+
+| DPI-C Call | Type | Description |
+|------------|------|-------------|
+| `rv_init(fw, ram_sz)` | import | Load firmware binary into ISS |
+| `rv_reset(pc)` | import | Reset ISS to given Program Counter |
+| `rv_step(max_insn)` | import | Execute up to max_insn instructions |
+| `rv_get_pc()` | import | Read current Program Counter |
+| `rv_mti_write_ram(offset, value)` | import | Write a 32-bit word to ISS RAM |
+| `rv_mti_set_irq(mask)` | import | Set interrupt bitmask |
+| `dpi_mmio_read(addr)` | export | Read MMIO register (callable from C) |
+| `dpi_mmio_write(addr, data)` | export | Write MMIO register (callable from C) |
+
+Compile the shared library and run a test:
+
+```bash
+cd dpi-riscv
+
+# Build firmware
+make firmware firmware_muldiv firmware_irq firmware_ahb firmware_mmio_regs
+
+# Compile the 32-bit DPI-C shared library
+gcc -shared -fPIC -m32 -I./sim/iss -o sim/modelsim/rv32_dpi_mti.so \
+    sim/modelsim/rv32_dpi_mti.c sim/iss/rv32_dpi.c
+
+# Run all ModelSim tests
+bash tests/run_modelsim.sh
+```
+
+Five pre-built testbenches are available in `sim/modelsim/`:
+
+| Testbench | Description |
+|-----------|-------------|
+| `tb_modelsim_basic.sv` | Basic MMIO smoke test |
+| `tb_modelsim_mmio_regs.sv` | MMIO register config test |
+| `tb_modelsim_muldiv.sv` | MUL/DIV extension test |
+| `tb_modelsim_irq.sv` | IRQ + WFI test |
+| `tb_modelsim_ahb.sv` | AHB GPIO self-test |
+
+For detailed documentation, see [ModelSim Documentation](dpi-riscv/docs/modelsim.md).
 
 ### MMIO Address Map
 
@@ -198,12 +252,14 @@ herve/
 │   │   ├── arch.md             # Architecture documentation
 │   │   ├── benchmark_results.md # Detailed benchmark analysis
 │   │   ├── integration.md      # DPI/VPI integration guide
-│   │   └── isa_support.md      # ISA support details
+│   │   ├── isa_support.md      # ISA support details
+│   │   └── modelsim.md         # ModelSim DPI-C integration guide
 │   ├── sim/
 │   │   ├── iss/                # ISS core (rv32_dpi.c, test harnesses)
 │   │   ├── harness/            # Verilator testbench harnesses
 │   │   ├── vpi/                # Icarus VPI wrapper
 │   │   ├── icarus/             # Icarus testbenches
+│   │   ├── modelsim/           # ModelSim DPI-C bridge and testbenches
 │   │   ├── bus/                # AHB-Lite BFM
 │   │   └── dut/                # AHB GPIO DUT
 │   └── tests/                  # Test scripts and analysis tools

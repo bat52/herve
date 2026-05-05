@@ -1,3 +1,0 @@
-test_name,passed,instructions,time_sec,ips,reason
-median.riscv,PASS,165000,2.725,60550,
-TOTAL,PASS,165000,2.725,60550,1 test

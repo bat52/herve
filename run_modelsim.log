@@ -1,0 +1,60 @@
+============================================
+ run_modelsim.sh — Tool detection
+============================================
+  ModelSim     : found (/home/marco/intelFPGA/20.1/modelsim_ase/bin)
+** Error: (vlib-35) Failed to create directory "/dev/null".
+File exists. (errno = EEXIST)
+  WARNING: ModelSim tools found but cannot execute (missing 32-bit libraries?)
+           Install 32-bit compatibility libraries:
+             sudo dpkg --add-architecture i386
+             sudo apt-get update
+             sudo apt-get install libc6:i386 lib32stdc++6
+  gcc          : found
+  RISC-V asm   : found (riscv64-unknown-elf)
+
+============================================
+ Building firmware binaries
+============================================
+
+  Building firmware...
+make: Nothing to be done for 'firmware'.
+    firmware: OK
+  Building firmware_muldiv...
+make: Nothing to be done for 'firmware_muldiv'.
+    firmware_muldiv: OK
+  Building firmware_irq...
+make: Nothing to be done for 'firmware_irq'.
+    firmware_irq: OK
+  Building firmware_ahb...
+make: Nothing to be done for 'firmware_ahb'.
+    firmware_ahb: OK
+  Building firmware_mmio_regs...
+make: Nothing to be done for 'firmware_mmio_regs'.
+    firmware_mmio_regs: OK
+
+============================================
+ Building DPI-C shared library
+============================================
+
+  Compiling sim/modelsim/rv32_dpi_mti.so...
+  Shared library: OK
+
+============================================
+ Running ModelSim DPI-C tests
+============================================
+
+  [SKIP] basic  (no ModelSim)
+  [SKIP] mmio_regs  (no ModelSim)
+  [SKIP] muldiv  (no ModelSim)
+  [SKIP] irq  (no ModelSim)
+  [SKIP] ahb  (no ModelSim)
+
+============================================
+ RESULTS
+============================================
+  Total : 5
+  Pass  : 0
+  Fail  : 0
+  Skip  : 5
+
+WARNING: No tests were able to run (all skipped).

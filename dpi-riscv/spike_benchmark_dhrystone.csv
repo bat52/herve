@@ -1,3 +1,0 @@
-test_name,passed,instructions,time_sec,ips,reason
-dhrystone.riscv,PASS,850000,11.979,70958,
-TOTAL,PASS,850000,11.979,70958,1 test
