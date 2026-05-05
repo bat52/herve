@@ -27,7 +27,7 @@ module tb_modelsim_muldiv;
     // ====================================================================
     import "DPI-C" function void rv_init(string firmware, int ram_size);
     import "DPI-C" function void rv_reset(int pc);
-    import "DPI-C" function int  rv_step(int max_insn);
+    import "DPI-C" context function int  rv_step(int max_insn);
     import "DPI-C" function int  rv_get_pc();
 
     // ====================================================================
@@ -95,7 +95,7 @@ module tb_modelsim_muldiv;
         //   reg[11] = REMU/0:     50 % 0 = 50
         //   reg[12] = INT32_MIN / -1 = 0x80000000
         //   reg[13] = INT32_MIN % -1 = 0
-        //   reg[14] = MUL large:  0x10000001 * 0x10000001 = 0x00000001
+        //   reg[14] = MUL large:  0x10000001 * 0x10000001 = 0x20000001
         //   reg[15] = MULH large: 0x10000001 * 0x10000001 -> upper = 0x01000000
         // ================================================================
 
@@ -217,14 +217,18 @@ module tb_modelsim_muldiv;
         end
 
         // Test 15: MUL large
-        if (mmio_regs[14] == 32'h0000_0001) begin
+        //   0x10000001 * 0x10000001 = 0x01000000_20000001
+        //   Low 32 bits = 0x20000001
+        if (mmio_regs[14] == 32'h2000_0001) begin
             $display("[PASS] reg[14] (MUL large)  = 0x%08X", mmio_regs[14]);
         end else begin
-            $display("[FAIL] reg[14] (MUL large)  = 0x%08X (expected 0x00000001)", mmio_regs[14]);
+            $display("[FAIL] reg[14] (MUL large)  = 0x%08X (expected 0x20000001)", mmio_regs[14]);
             pass = 0;
         end
 
         // Test 16: MULH large
+        //   0x10000001 * 0x10000001 = 0x01000000_20000001
+        //   Upper 32 bits = 0x01000000
         if (mmio_regs[15] == 32'h0100_0000) begin
             $display("[PASS] reg[15] (MULH large) = 0x%08X", mmio_regs[15]);
         end else begin

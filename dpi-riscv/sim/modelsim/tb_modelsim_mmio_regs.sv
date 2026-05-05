@@ -29,7 +29,7 @@ module tb_modelsim_mmio_regs;
     // ====================================================================
     import "DPI-C" function void rv_init(string firmware, int ram_size);
     import "DPI-C" function void rv_reset(int pc);
-    import "DPI-C" function int  rv_step(int max_insn);
+    import "DPI-C" context function int  rv_step(int max_insn);
     import "DPI-C" function int  rv_get_pc();
 
     // ====================================================================

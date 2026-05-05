@@ -13,7 +13,8 @@
 #   ./tests/run_modelsim.sh
 #
 # Environment variables:
-#   MODELSIM_DIR   — Path to ModelSim installation (default: auto-detect)
+#   INTELFPGA_DIR  — Path to Intel FPGA installation root (default: $HOME/intelFPGA)
+#   MODELSIM_DIR   — Path to ModelSim installation (takes precedence over INTELFPGA_DIR)
 #   RISCV_PREFIX   — RISC-V toolchain prefix (default: riscv64-unknown-elf)
 #
 
@@ -52,7 +53,6 @@ run_test() {
     # Create a temporary working directory for this test
     local work_dir
     work_dir=$(mktemp -d)
-    trap 'rm -rf "$work_dir"' RETURN
 
     cd "$work_dir" || return 1
 
@@ -126,33 +126,56 @@ VLOG=""
 VSIM=""
 HAS_MODELSIM=0
 
-# Try common ModelSim installation paths
-MODELSIM_CANDIDATES=(
-    "/opt/intelFPGA/20.1/modelsim_ase/linux_x86_64"
-    "/opt/intelFPGA/20.1/modelsim_ae/linux_x86_64"
-    "/opt/intelFPGA/19.1/modelsim_ase/linux_x86_64"
-    "/opt/intelFPGA/19.1/modelsim_ae/linux_x86_64"
-    "/opt/modelsim/modeltech/linux_x86_64"
-    "/usr/local/modelsim/modeltech/linux_x86_64"
-)
-
+# Priority 1: MODELSIM_DIR explicitly set by user
 if [ -n "${MODELSIM_DIR:-}" ]; then
-    # User-specified directory
     if [ -x "$MODELSIM_DIR/vsim" ]; then
-        VLIB="$MODELSIM_DIR/vlib"
-        VLOG="$MODELSIM_DIR/vlog"
-        VSIM="$MODELSIM_DIR/vsim"
+        export PATH="$MODELSIM_DIR:$PATH"
+        VLIB="vlib"
+        VLOG="vlog"
+        VSIM="vsim"
         HAS_MODELSIM=1
         echo "  ModelSim     : found ($MODELSIM_DIR)"
     else
         echo "  ModelSim     : NOT found at MODELSIM_DIR=$MODELSIM_DIR"
     fi
-else
+fi
+
+# Priority 2: INTELFPGA_DIR — auto-discover latest version
+if [ "$HAS_MODELSIM" -eq 0 ]; then
+    INTELFPGA_DIR="${INTELFPGA_DIR:-$HOME/intelFPGA}"
+    if [ -d "$INTELFPGA_DIR" ]; then
+        # Find the latest version subdirectory (sorted numerically, descending)
+        latest_ver=$(ls -1 "$INTELFPGA_DIR" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' | sort -t. -k1,1nr -k2,2nr | head -1)
+        if [ -n "$latest_ver" ]; then
+            modelsim_bin="$INTELFPGA_DIR/$latest_ver/modelsim_ase/bin"
+            if [ -x "$modelsim_bin/vsim" ]; then
+                export PATH="$modelsim_bin:$PATH"
+                VLIB="vlib"
+                VLOG="vlog"
+                VSIM="vsim"
+                HAS_MODELSIM=1
+                echo "  ModelSim     : found ($modelsim_bin)"
+            fi
+        fi
+    fi
+fi
+
+# Priority 3: Try common hardcoded paths (fallback)
+if [ "$HAS_MODELSIM" -eq 0 ]; then
+    MODELSIM_CANDIDATES=(
+        "/opt/intelFPGA/20.1/modelsim_ase/linux_x86_64"
+        "/opt/intelFPGA/20.1/modelsim_ae/linux_x86_64"
+        "/opt/intelFPGA/19.1/modelsim_ase/linux_x86_64"
+        "/opt/intelFPGA/19.1/modelsim_ae/linux_x86_64"
+        "/opt/modelsim/modeltech/linux_x86_64"
+        "/usr/local/modelsim/modeltech/linux_x86_64"
+    )
     for dir in "${MODELSIM_CANDIDATES[@]}"; do
         if [ -x "$dir/vsim" ]; then
-            VLIB="$dir/vlib"
-            VLOG="$dir/vlog"
-            VSIM="$dir/vsim"
+            export PATH="$dir:$PATH"
+            VLIB="vlib"
+            VLOG="vlog"
+            VSIM="vsim"
             HAS_MODELSIM=1
             echo "  ModelSim     : found ($dir)"
             break
@@ -160,6 +183,7 @@ else
     done
 fi
 
+# Priority 4: vsim in PATH
 if [ "$HAS_MODELSIM" -eq 0 ]; then
     if command -v vsim &>/dev/null; then
         VSIM="vsim"
@@ -169,6 +193,23 @@ if [ "$HAS_MODELSIM" -eq 0 ]; then
         echo "  ModelSim     : found (in PATH)"
     else
         echo "  ModelSim     : NOT found (all tests will be skipped)"
+    fi
+fi
+
+# Verify ModelSim tools are actually executable (not just symlinks to vco)
+if [ "$HAS_MODELSIM" -eq 1 ]; then
+    # Run vlib with no args — exit code 126 or 127 means the binary
+    # can't execute at all (e.g. missing 32-bit libraries).
+    # Exit code 1 (usage) means it works fine.
+    "$VLIB" 2>/dev/null
+    rc=$?
+    if [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then
+        echo "  WARNING: ModelSim tools found but cannot execute (missing 32-bit libraries?)"
+        echo "           Install 32-bit compatibility libraries:"
+        echo "             sudo dpkg --add-architecture i386"
+        echo "             sudo apt-get update"
+        echo "             sudo apt-get install libc6:i386 lib32stdc++6"
+        HAS_MODELSIM=0
     fi
 fi
 
@@ -239,7 +280,7 @@ if [ "$HAS_GCC" -eq 1 ]; then
     echo ""
 
     echo "  Compiling $SO_FILE..."
-    if gcc -shared -fPIC -I./sim/iss -o "$SO_FILE" \
+    if gcc -shared -fPIC -m32 -I./sim/iss -o "$SO_FILE" \
         sim/modelsim/rv32_dpi_mti.c sim/iss/rv32_dpi.c 2>&1; then
         echo "  Shared library: OK"
     else

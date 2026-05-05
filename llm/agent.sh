@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SESSION="agent-$(hostname -s)"
+SESSION="agent-$(basename "$PWD")-$(hostname -s)"
 
 # If session exists → just attach
 if tmux has-session -t $SESSION 2>/dev/null; then

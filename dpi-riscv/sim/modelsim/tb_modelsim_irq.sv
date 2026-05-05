@@ -31,7 +31,7 @@ module tb_modelsim_irq;
     // ====================================================================
     import "DPI-C" function void rv_init(string firmware, int ram_size);
     import "DPI-C" function void rv_reset(int pc);
-    import "DPI-C" function int  rv_step(int max_insn);
+    import "DPI-C" context function int  rv_step(int max_insn);
     import "DPI-C" function int  rv_get_pc();
     import "DPI-C" function void rv_mti_set_irq(int mask);
 
@@ -83,6 +83,11 @@ module tb_modelsim_irq;
         rv_reset(0);
         $display("ISS initialized, RAM = 1 MiB");
 
+        // Initialize GPIO_OUT to 0 (prevents X propagation)
+        mmio_regs[0] = 32'd0;
+        mmio_regs[1] = 32'd0;
+        mmio_regs[2] = 32'd0;
+
         // ================================================================
         // Phase 1: Boot firmware
         //   firmware_irq.S configures mtvec=0x100, enables MIE,
@@ -108,9 +113,26 @@ module tb_modelsim_irq;
         $display("IRQ asserted (rv_mti_set_irq(1))");
 
         executed = rv_step(100);
-        $display("rv_step: executed %0d instructions", executed);
+        $display("rv_step (vector): executed %0d instructions", executed);
         pc = rv_get_pc();
-        $display("PC after Phase 2: 0x%08x", pc);
+        $display("PC after vector: 0x%08x", pc);
+
+        // ================================================================
+        // Phase 3: Execute the interrupt handler
+        //   rv_step returns 1 after vectoring (no instructions executed).
+        //   Call rv_step again to execute the handler body:
+        //     lw t1, 8(t0)   — read GPIO_STATUS
+        //     lw t2, 0(t0)   — read GPIO_OUT
+        //     xori t2, t2, 1 — toggle bit 0
+        //     sw t2, 0(t0)   — write GPIO_OUT
+        //     mret           — return from interrupt
+        // ================================================================
+        $display("");
+        $display("--- Phase 3: Execute handler ---");
+        executed = rv_step(100);
+        $display("rv_step (handler): executed %0d instructions", executed);
+        pc = rv_get_pc();
+        $display("PC after handler: 0x%08x", pc);
 
         // ================================================================
         // Verify results

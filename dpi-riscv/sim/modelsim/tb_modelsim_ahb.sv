@@ -50,7 +50,7 @@ module tb_modelsim_ahb;
     // ====================================================================
     import "DPI-C" function void rv_init(string firmware, int ram_size);
     import "DPI-C" function void rv_reset(int pc);
-    import "DPI-C" function int  rv_step(int max_insn);
+    import "DPI-C" context function int  rv_step(int max_insn);
     import "DPI-C" function int  rv_get_pc();
     import "DPI-C" function void rv_mti_set_irq(int mask);
 
@@ -123,6 +123,12 @@ module tb_modelsim_ahb;
         rv_init("firmware_ahb.bin", 1 << 20);
         rv_reset(0);
         $display("ISS initialized, RAM = 1 MiB");
+
+        // Initialize registers to known values (prevents X propagation)
+        mmio_regs[0] = 32'd0;  // GPIO_OUT
+        mmio_regs[1] = 32'd0;  // GPIO_IE
+        mmio_regs[2] = 32'd0;  // GPIO_STATUS
+        ext_irq = 0;
 
         // ================================================================
         // Phase 1: Boot firmware

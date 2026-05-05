@@ -27,10 +27,11 @@ _start:
 
     /* ================================================================
      * Write 0xAAAA_AAAB to reg[0] (offset 0x00)
-     *   0xAAAA_AAAB = 0xAAAA_A000 + 0xAAB
+     *   0xAAAA_AAAB = 0xAAAA_B000 - 0x555
      *   Lower 12 bits = 0xAAB (sign-extends to -0x555 = -1365)
+     *   lui 0xAAAA_B + addi -0x555 = 0xAAAA_B000 - 0x555 = 0xAAAA_AAAB
      * ================================================================ */
-    lui  t1, 0xAAAAA               # t1 = 0xAAAA_A000
+    lui  t1, 0xAAAAB               # t1 = 0xAAAA_B000
     addi t1, t1, -1365             # t1 = 0xAAAA_AAAB (0xAAB = -1365 signed)
     sw   t1, 0(t0)                 # reg[0] = 0xAAAA_AAAB
 

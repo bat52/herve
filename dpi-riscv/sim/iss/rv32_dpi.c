@@ -539,7 +539,14 @@ static bool execute_instruction(uint32_t insn) {
                         write_reg(rd, (uint32_t)(((int64_t)(int32_t)src1 * (int64_t)(int32_t)src2) >> 32));
                         break;
                     case 0x2: // MULHSU
-                        write_reg(rd, (uint32_t)(((int64_t)(int32_t)src1 * (uint64_t)src2) >> 32));
+                        {
+                            // MULHSU: signed(src1) * unsigned(src2), upper 32 bits
+                            int64_t a = (int64_t)(int32_t)src1;
+                            uint64_t b = (uint64_t)src2;
+                            uint64_t product = (uint64_t)a * b;
+                            uint32_t result = (uint32_t)(product >> 32);
+                            write_reg(rd, result);
+                        }
                         break;
                     case 0x3: // MULHU
                         write_reg(rd, (uint32_t)(((uint64_t)src1 * (uint64_t)src2) >> 32));

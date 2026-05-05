@@ -43,7 +43,7 @@ DUT_SV       = sim/dut/ahb_gpio.sv
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb firmware_mmio_regs run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone
 
 all: run
 
@@ -178,7 +178,6 @@ firmware_mmio_regs: $(FIRMWARE_MMIO_REGS_BIN)
 
 # ---- AHB firmware ----
 $(FIRMWARE_AHB_O): $(FIRMWARE_AHB_S)
-
 	$(RISCV_PREFIX)-as -march=rv32im_zicsr -o $@ $<
 
 $(FIRMWARE_AHB_ELF): $(FIRMWARE_AHB_O)
