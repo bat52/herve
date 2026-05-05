@@ -68,4 +68,10 @@ dpi-riscv/rv32_dpi_riscv_tests_isa
 dpi-riscv/rv32_dpi_benchmark
 dpi-riscv/rv32_dpi_elf_test
 dpi-riscv/median.riscv
+dpi-riscv/mm.riscv
 dpi-riscv/rv32_dpi_benchmark_htif
+dpi-riscv/herve_benchmark_mm.csv
+dpi-riscv/spike_benchmark_mm.csv
+dpi-riscv/test_softfloat
+dpi-riscv/debug_mul
+dpi-riscv/debug_mul.c

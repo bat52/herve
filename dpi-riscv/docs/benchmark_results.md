@@ -2,9 +2,10 @@
 
 ## Overview
 
-This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using two workloads:
+This report compares the execution performance of **Herve** (a lightweight RV32IM[C] ISS) against **Spike** (the official RISC-V ISA simulator) using three workloads:
 1. The standard **riscv-tests** ISA test suite (rv32ui-p-*, rv32um-p-*, rv32uc-p-*)
 2. The **median** benchmark from riscv-tests benchmarks (HTIF-based)
+3. The **mm** (matrix multiply) benchmark from riscv-tests benchmarks (HTIF-based, requires soft-float)
 
 ### ISA Test Suite Results
 
@@ -27,6 +28,17 @@ This report compares the execution performance of **Herve** (a lightweight RV32I
 | **Overall IPS** | 96,491,228 | 70,664 | **1,365×** |
 | **Tests passed** | **1/1** | 1/1 | — |
 | **Benchmark** | median.riscv | median.riscv | — |
+
+### mm (Matrix Multiply) Benchmark Results
+
+| Metric | Herve ISS | Spike | Speedup (Spike/Herve) |
+|--------|-----------|-------|----------------------|
+| **Total instructions** | 33,017,000 | 33,520,000 | — |
+| **Total time** | 0.297 s | 446.957 s | **1,507×** |
+| **Overall IPS** | 111,350,185 | 74,996 | **1,485×** |
+| **Tests passed** | **1/1** | 1/1 | — |
+| **Benchmark** | mm.riscv | mm.riscv | — |
+| **Soft-float** | Custom `softfloat.c` | Spike native | — |
 
 ---
 
@@ -139,6 +151,7 @@ This means the **speedup ratios** are somewhat inflated for Herve since it execu
 | rv32um-p-rem | 130 | 5,134 | 0.000002 | 0.075 | 63,260,341 | 68,453 | 37,500× |
 | rv32um-p-remu | 130 | 5,134 | 0.000002 | 0.070 | 83,762,887 | 73,343 | 35,000× |
 | **median.riscv** | **11,000** | **165,000** | **0.000114** | **2.335** | **96,590,360** | **70,664** | **20,482×** |
+| **mm.riscv** | **33,017,000** | **33,520,000** | **0.297** | **446.957** | **111,350,185** | **74,996** | **1,507×** |
 
 
 ## Analysis
@@ -238,6 +251,9 @@ The `run_spike_benchmark.sh` script supports a `--benchmark <elf>` flag for runn
 # Build the median benchmark ELF
 make median.riscv
 
+# Build the mm benchmark ELF (requires softfloat.o and sync_stubs.o)
+make mm.riscv
+
 # Build the HTIF benchmark runner
 make rv32_dpi_benchmark_htif
 
@@ -249,12 +265,17 @@ make run_benchmark_htif_csv
 
 # Run Spike benchmark (human-readable)
 make run_spike_benchmark_median
+make run_spike_benchmark_mm
 
 # Run Spike benchmark (CSV)
 make run_spike_benchmark_median_csv
+make run_spike_benchmark_mm_csv
 
-# Full comparison (Herve vs Spike)
+# Full comparison (Herve vs Spike) for median
 make compare_benchmark_htif
+
+# Full comparison (Herve vs Spike) for mm
+make compare_benchmark_mm
 ```
 
 ### Makefile Targets
@@ -262,12 +283,18 @@ make compare_benchmark_htif
 | Target | Description |
 |--------|-------------|
 | `median.riscv` | Build the median benchmark ELF from riscv-tests source |
+| `mm.riscv` | Build the mm (matrix multiply) benchmark ELF (requires softfloat.o, sync_stubs.o) |
+| `softfloat.o` | Build the custom soft-float library for RV32 double-precision emulation |
+| `sync_stubs.o` | Build sync stubs for `__sync_fetch_and_add_4` |
 | `rv32_dpi_benchmark_htif` | Build the HTIF-aware Herve benchmark runner |
 | `run_benchmark_htif` | Run all `.riscv` benchmarks on Herve |
 | `run_benchmark_htif_csv` | Run all `.riscv` benchmarks on Herve (CSV output) |
 | `run_spike_benchmark_median` | Run median benchmark on Spike |
 | `run_spike_benchmark_median_csv` | Run median benchmark on Spike (CSV output) |
-| `compare_benchmark_htif` | Full Herve vs Spike comparison for HTIF benchmarks |
+| `run_spike_benchmark_mm` | Run mm benchmark on Spike |
+| `run_spike_benchmark_mm_csv` | Run mm benchmark on Spike (CSV output) |
+| `compare_benchmark_htif` | Full Herve vs Spike comparison for HTIF benchmarks (median) |
+| `compare_benchmark_mm` | Full Herve vs Spike comparison for mm benchmark |
 
 ---
 

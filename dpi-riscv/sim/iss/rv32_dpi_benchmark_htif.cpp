@@ -70,8 +70,10 @@ extern "C" void dpi_mmio_write(int addr, int data) {
 // Test runner
 // -----------------------------------------------------------------------
 
-#define MAX_INSTRUCTIONS 5000000   // 5M max for benchmarks
-#define MAX_STALE_CHECKS 2000
+#ifndef MAX_INSTRUCTIONS
+#define MAX_INSTRUCTIONS 200000000  // 200M max for benchmarks (mm needs more)
+#endif
+#define MAX_STALE_CHECKS 50000
 
 struct HtifBenchmarkResult {
     std::string name;
@@ -88,22 +90,68 @@ static uint8_t *global_ram = NULL;
 static size_t global_ram_size = 0;
 
 /**
- * Check if the HTIF tohost value indicates benchmark completion.
- * Returns the exit code if complete, -1 if not yet complete.
+ * HTIF syscall handler.
+ *
+ * The riscv-tests benchmarks use the HTIF (Host-Target Interface) protocol:
+ *   - tohost at 0x80001000, fromhost at 0x80001008
+ *   - For exit: tohost = (exit_code << 1) | 1  (bit 0 set)
+ *   - For syscalls: tohost = pointer to magic_mem[8] structure
+ *     magic_mem[0] = syscall number (e.g. 64 = SYS_write)
+ *     magic_mem[1] = arg0 (device for SYS_write: 1 = console)
+ *     magic_mem[2] = arg1 (pointer to data)
+ *     magic_mem[3] = arg2 (command for SYS_write: 1 = putc)
+ *
+ * Returns the exit code if benchmark completed, -1 if still running.
  */
-static int check_htif_tohost(void) {
-    // tohost is a uint64_t at TOHOST_ADDR
-    // The benchmark writes (exit_code << 1) | 1 to signal completion
-    if (TOHOST_ADDR + 8 > global_ram_size) {
+static int handle_htif(void) {
+    if (TOHOST_ADDR + 16 > global_ram_size) {
         return -1;
     }
-    uint64_t tohost;
-    memcpy(&tohost, &global_ram[TOHOST_ADDR], sizeof(tohost));
-    if (tohost & 1) {
-        // Bit 0 set — benchmark has exited
-        return (int)(tohost >> 1);
+
+    // Read tohost value
+    uint64_t tohost_val;
+    memcpy(&tohost_val, &global_ram[TOHOST_ADDR], sizeof(tohost_val));
+
+    if (tohost_val == 0) {
+        return -1;  // No pending HTIF request
     }
-    return -1;
+
+    if (tohost_val & 1) {
+        // Bit 0 set — benchmark has exited via tohost_exit()
+        // tohost = (exit_code << 1) | 1
+        return (int)(tohost_val >> 1);
+    }
+
+    // tohost is a pointer to magic_mem[8] — process syscall
+    uint32_t magic_ptr = (uint32_t)tohost_val;
+
+    // Read syscall info from magic_mem
+    uint32_t syscall_no, arg0, arg1, arg2;
+    memcpy(&syscall_no, &global_ram[magic_ptr + 0], sizeof(syscall_no));
+    memcpy(&arg0,      &global_ram[magic_ptr + 4], sizeof(arg0));
+    memcpy(&arg1,      &global_ram[magic_ptr + 8], sizeof(arg1));
+    memcpy(&arg2,      &global_ram[magic_ptr + 12], sizeof(arg2));
+
+    // Handle SYS_write to console (putchar)
+    if (syscall_no == 64 && arg0 == 1 && arg2 == 1) {
+        // Console putchar — arg1 is pointer to character
+        char ch;
+        memcpy(&ch, &global_ram[arg1], 1);
+        putchar(ch);
+        fflush(stdout);
+    }
+
+    // Acknowledge by writing to fromhost
+    // fromhost = (device << 56) | (tag << 16) | (data)
+    // For simplicity, just write 1 to fromhost
+    uint64_t fromhost_val = 1;
+    memcpy(&global_ram[TOHOST_ADDR + 8], &fromhost_val, sizeof(fromhost_val));
+
+    // Clear tohost to indicate request processed
+    tohost_val = 0;
+    memcpy(&global_ram[TOHOST_ADDR], &tohost_val, sizeof(tohost_val));
+
+    return -1;  // Benchmark still running
 }
 
 static int run_htif_benchmark(const uint8_t *elf_data, size_t elf_size,
@@ -136,10 +184,10 @@ static int run_htif_benchmark(const uint8_t *elf_data, size_t elf_size,
     while (total_executed < MAX_INSTRUCTIONS) {
         int executed = rv_step(1000);
         if (executed == 0) {
-            // rv_step returned 0 — check if HTIF tohost was written
-            exit_code = check_htif_tohost();
+            // rv_step returned 0 — handle HTIF (syscall or exit)
+            exit_code = handle_htif();
             if (exit_code >= 0) {
-                break;  // benchmark completed via HTIF
+                break;  // benchmark completed via HTIF exit
             }
             // If not HTIF, it might be ECALL/EBREAK or WFI
             // Check if we're in an infinite loop
@@ -147,10 +195,10 @@ static int run_htif_benchmark(const uint8_t *elf_data, size_t elf_size,
         }
         total_executed += executed;
 
-        // Check HTIF tohost periodically
-        exit_code = check_htif_tohost();
+        // Handle HTIF (process syscalls, check for exit)
+        exit_code = handle_htif();
         if (exit_code >= 0) {
-            break;  // benchmark completed via HTIF
+            break;  // benchmark completed via HTIF exit
         }
 
         // Detect infinite loop (stale PC)
@@ -198,15 +246,20 @@ static int run_htif_benchmark(const uint8_t *elf_data, size_t elf_size,
         return -1;
     }
     if (stale_count >= MAX_STALE_CHECKS) {
+        uint32_t stuck_pc = rv_get_pc();
+        fprintf(stderr, "DEBUG: stale PC at 0x%08x after %d insn (stale_count=%d)\n",
+                stuck_pc, total_executed, stale_count);
         result->passed = false;
-        result->reason = "stale PC (infinite loop)";
+        char reason[128];
+        snprintf(reason, sizeof(reason), "stale PC (infinite loop) at 0x%08x", stuck_pc);
+        result->reason = reason;
         result->exit_code = -1;
         return -1;
     }
 
     // rv_step returned 0 but no HTIF — possibly ECALL/EBREAK
     // Check tohost one more time
-    exit_code = check_htif_tohost();
+    exit_code = handle_htif();
     if (exit_code >= 0) {
         result->exit_code = exit_code;
         if (exit_code == 0) {
