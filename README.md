@@ -176,6 +176,8 @@ make compare_benchmark
 
 Raw data: `dpi-riscv/herve_benchmark.csv` and `dpi-riscv/spike_benchmark.csv`
 
+For a detailed breakdown including per-test results, HTIF benchmarks (median, mm, memcpy), methodology, and analysis, see [Benchmark Results](dpi-riscv/docs/benchmark_results.md).
+
 ## Project Structure
 
 ```
