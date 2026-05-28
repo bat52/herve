@@ -50,8 +50,11 @@ static inline void trace_insn(uint32_t pc, uint32_t insn, const char *mnemonic,
  * No external libraries, no POSIX APIs.
  */
 
-#define MMIO_BASE 0x10000000u
-#define MMIO_SIZE 0x00100000u
+#define MMIO_BASE       0x10000000u
+#define MMIO_SIZE       0x00100000u
+
+/* Machine timer interrupt bit (cause 7 = MTI) */
+#define MIE_MTIE          0x00000080u
 
 static uint8_t *memory = NULL;
 static uint32_t memory_size = 0;
@@ -95,6 +98,14 @@ static uint32_t csr_mtvec = 0;
 static uint32_t csr_mepc = 0;
 static uint32_t csr_mcause = 0;
 static uint64_t csr_mcycle = 0;   /* cycle counter, incremented each instruction */
+static uint32_t csr_mie = 0xFFFFFFFFu; /* machine interrupt-enable (0x304), default all-enabled for compat */
+
+/*
+ * Machine timer (mtime/mtimecmp) — 64-bit counter and compare register.
+ * The counter increments at instruction rate. When mtime >= mtimecmp,
+ * the machine timer interrupt (IRQ bit 7) is raised.
+ */
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -168,6 +179,8 @@ static inline bool is_htif_address(uint32_t addr) {
 static inline bool is_mmio_address(uint32_t addr) {
     return (addr >= MMIO_BASE && addr < MMIO_BASE + MMIO_SIZE);
 }
+
+
 
 static inline uint32_t sign_extend(uint32_t value, unsigned bits) {
     uint32_t shift = 32 - bits;
@@ -960,9 +973,11 @@ static bool execute_instruction(uint32_t insn) {
                 // Read current CSR value
                 switch (csr_addr) {
                     case 0x300: csr_val = csr_mstatus; break;
+                    case 0x304: csr_val = csr_mie;     break;
                     case 0x305: csr_val = csr_mtvec;   break;
                     case 0x341: csr_val = csr_mepc;    break;
                     case 0x342: csr_val = csr_mcause;  break;
+                    case 0x344: csr_val = (irq_mask & MIE_MTIE) ? MIE_MTIE : 0; break; // mip — MTIP reflects timer pend
                     case 0xB00: csr_val = (uint32_t)(csr_mcycle & 0xFFFFFFFFu); break; // mcycle (lower 32 bits)
                     case 0xB02: csr_val = (uint32_t)(csr_mcycle & 0xFFFFFFFFu); break; // minstret
                     case 0xF11: csr_val = 0x00000000u; break; // mvendorid
@@ -1008,9 +1023,11 @@ static bool execute_instruction(uint32_t insn) {
                 // Write new CSR value (read-only CSRs skip write)
                 switch (csr_addr) {
                     case 0x300: csr_mstatus = new_val; break;
+                    case 0x304: csr_mie     = new_val; break;
                     case 0x305: csr_mtvec   = new_val; break;
                     case 0x341: csr_mepc    = new_val; break;
                     case 0x342: csr_mcause  = new_val; break;
+                    // 0x344 (mip) is read-only — skip write
                     // 0xF11, 0xF12, 0xF14 are read-only — skip write
                     default: break;
                 }
@@ -1218,6 +1235,7 @@ uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
     pc = 0;
     irq_mask = 0;
     wfi_sleep = false;
+    csr_mie = 0xFFFFFFFFu;
     initialized = true;
 
     /* Load each PT_LOAD segment */
@@ -1402,6 +1420,7 @@ void rv_init(const char *firmware, size_t ram_size) {
     pc = 0;
     irq_mask = 0;
     wfi_sleep = false;
+    csr_mie = 0xFFFFFFFFu;
     initialized = true;
 
     if (firmware != NULL) {
@@ -1438,6 +1457,7 @@ void rv_init_from_buffer(const uint8_t *data, size_t size, size_t ram_size) {
     pc = 0;
     irq_mask = 0;
     wfi_sleep = false;
+    csr_mie = 0xFFFFFFFFu;
     initialized = true;
 
     if (data != NULL && size > 0) {
@@ -1456,6 +1476,7 @@ void rv_reset(uint32_t start_pc) {
     irq_mask = 0;
     wfi_sleep = false;
     csr_mcycle = 0;
+    csr_mie = 0xFFFFFFFFu;
 }
 
 /* Count trailing zeros (CTZ) — returns position of lowest set bit */
@@ -1471,27 +1492,38 @@ int rv_step(int max_instructions) {
         return 0;
     }
 
-    /* Wake from WFI if an interrupt is now pending */
+    /* Mask pending IRQs with mie: only enabled interrupts are considered */
+    uint32_t pending = irq_mask & csr_mie;
+
+    /* Wake from WFI if an enabled interrupt is now pending */
     if (wfi_sleep) {
-        if (irq_mask != 0 && (csr_mstatus & 0x8)) {
+        if (pending != 0 && (csr_mstatus & 0x8)) {
             wfi_sleep = false;  /* wake up */
         } else {
             return 0;  /* still sleeping */
         }
     }
 
-    /* Check for pending interrupts at start of batch (only if MIE is set) */
-    if (irq_mask != 0 && (csr_mstatus & 0x8)) {
-        unsigned cause = ctz32(irq_mask);
+    /* Check for pending enabled interrupts at start of batch (only if MIE is set) */
+    if (pending != 0 && (csr_mstatus & 0x8)) {
+        unsigned cause = ctz32(pending);
         csr_mcause = cause;
         csr_mepc = pc;
-        /* Clear the bit we're servicing */
+        /* Clear only the bit we're servicing (leave other bits for later) */
         irq_mask &= ~(1u << cause);
         /* Disable interrupts (clear MIE bit in mstatus) during handler */
         csr_mstatus &= ~0x8u;
-        /* Jump to vectored interrupt handler: mtvec + cause * 4 */
-        /* If mtvec[0] == 0 (direct mode), all interrupts go to mtvec */
-        pc = (csr_mtvec & ~0x3u) + cause * 4;
+        /* Jump to interrupt handler:
+         *   Direct mode  (mtvec[0]=0): pc = mtvec_base
+         *   Vectored mode (mtvec[0]=1): pc = mtvec_base + cause * 4
+         */
+        if (csr_mtvec & 0x3u) {
+            /* Vectored mode */
+            pc = (csr_mtvec & ~0x3u) + cause * 4;
+        } else {
+            /* Direct mode */
+            pc = csr_mtvec & ~0x3u;
+        }
         return 1;
     }
 

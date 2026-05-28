@@ -1,0 +1,15 @@
+identifier: herve
+name: Herve RISC-V ISS
+type: mcu
+arch: riscv
+ram: 16384
+flash: 0
+toolchain:
+  - zephyr
+  - cross-compile
+testing:
+  timeout: 60
+  default: true
+supported:
+  - htif
+  - riscv_machine_timer

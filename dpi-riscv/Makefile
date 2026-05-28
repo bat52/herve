@@ -43,7 +43,7 @@ DUT_SV       = sim/dut/ahb_gpio.sv
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb firmware_mmio_regs run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone herve
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_timer run_zephyr_boot run_ahb firmware firmware_muldiv firmware_irq firmware_ahb firmware_mmio_regs firmware_timer run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone herve
 
 all: run
 
@@ -163,6 +163,57 @@ obj_dir/V$(TOP)_irq: $(SV) $(CPP_IRQ) $(C) $(FIRMWARE_IRQ_BIN) sim/iss/herve_pro
 
 run_irq: firmware_irq obj_dir/V$(TOP)_irq
 	./obj_dir/V$(TOP)_irq
+
+# ---- Machine Timer firmware ----
+FIRMWARE_TIMER_S = firmware_timer.S
+FIRMWARE_TIMER_BIN = firmware_timer.bin
+FIRMWARE_TIMER_O = firmware_timer.o
+FIRMWARE_TIMER_ELF = firmware_timer.elf
+
+$(FIRMWARE_TIMER_O): $(FIRMWARE_TIMER_S)
+	$(RISCV_PREFIX)-as -march=rv32im_zicsr -o $@ $<
+
+$(FIRMWARE_TIMER_ELF): $(FIRMWARE_TIMER_O)
+	$(RISCV_PREFIX)-ld -m elf32lriscv -Ttext=0x00000000 -o $@ $<
+
+$(FIRMWARE_TIMER_BIN): $(FIRMWARE_TIMER_ELF)
+	$(RISCV_PREFIX)-objcopy -O binary $< $@
+
+firmware_timer: $(FIRMWARE_TIMER_BIN)
+
+# ---- Machine Timer testcase (Verilator) ----
+SV_ZEPHYR = sim/harness/tb_top_zephyr.sv
+CPP_ZEPHYR = sim/harness/rv32_dpi_zephyr_tb.cpp
+
+obj_dir/V$(TOP)_zephyr: $(SV_ZEPHYR) $(CPP_ZEPHYR) $(C) $(FIRMWARE_TIMER_BIN) sim/iss/herve_profiler.c
+	mkdir -p obj_dir
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
+	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
+	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_ -DVL_DPIDECL_rv_set_irq_" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
+	  -o V$(TOP)_zephyr \
+	  $(SV_ZEPHYR) $(CPP_ZEPHYR)
+
+run_timer: firmware_timer obj_dir/V$(TOP)_zephyr
+	./obj_dir/V$(TOP)_zephyr
+
+# ---- Zephyr Boot Harness (Verilator) ----
+CPP_ZEPHYR_BOOT = sim/harness/rv32_dpi_zephyr_boot_tb.cpp
+
+obj_dir/V$(TOP)_zephyr_boot: $(SV_ZEPHYR) $(CPP_ZEPHYR_BOOT) $(C) sim/iss/herve_profiler.c
+	mkdir -p obj_dir
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
+	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
+	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_ -DVL_DPIDECL_rv_set_irq_" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
+	  -o V$(TOP)_zephyr_boot \
+	  $(SV_ZEPHYR) $(CPP_ZEPHYR_BOOT)
+
+# Run the boot harness with the timer firmware ELF (for testing)
+run_zephyr_boot: firmware_timer obj_dir/V$(TOP)_zephyr_boot
+	./obj_dir/V$(TOP)_zephyr_boot firmware_timer.elf -c 80000
 
 # ---- MMIO regs firmware ----
 FIRMWARE_MMIO_REGS_S = firmware_mmio_regs.S
@@ -402,7 +453,7 @@ herve: $(HERVE_SOURCES)
 	gcc -std=c11 -O2 -I./sim/iss -I. -o $@ $(HERVE_SOURCES)
 
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o firmware_mmio_regs.elf firmware_mmio_regs.bin firmware_mmio_regs.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o firmware_mmio_regs.elf firmware_mmio_regs.bin firmware_mmio_regs.o firmware_timer.elf firmware_timer.bin firmware_timer.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
 
 
 

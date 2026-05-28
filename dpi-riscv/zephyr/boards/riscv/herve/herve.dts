@@ -1,0 +1,83 @@
+/*
+ * Copyright (c) 2024 Herve Project Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Device Tree for the Herve RISC-V ISS platform.
+ *
+ * Herve is a lightweight RV32IM[C] instruction set simulator with:
+ *   - RV32IM CPU (single core, machine mode only)
+ *   - 16 MB RAM at 0x00000000
+ *   - Machine timer at 0x10000010
+ *   - HTIF console at 0x80001000
+ *   - GPIO at 0x10000000 (optional)
+ */
+
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "herve,herve-iss";
+	model = "herve";
+
+	chosen {
+		zephyr,console = &htif;
+		zephyr,shell-uart = &htif;
+		zephyr,sram = &sram;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <1000000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "riscv";
+			riscv,isa = "rv32im";
+			reg = <0>;
+			clock-frequency = <1000000>;
+			status = "okay";
+
+			interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+	};
+
+	sram: memory@0 {
+		device_type = "memory";
+		compatible = "mmio-sram";
+		reg = <0x00000000 0x1000000>;  /* 16 MB */
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		/* Machine timer (RISC-V spec, accessed via CLINT-like interface)
+		 * The reg property points to the mtimecmp register.
+		 * mtime is implicitly at reg - 8 (0x10000010).
+		 */
+		timer: timer@10000018 {
+			compatible = "riscv,machine-timer";
+			reg = <0x10000018 0x8>;
+			interrupts = <7>;
+			interrupt-parent = <&cpu0>;
+			status = "okay";
+		};
+
+		/* Host-Target Interface (HTIF) for console I/O
+		 * Used by Spike-compatible RISC-V simulators.
+		 */
+		htif: htif@80001000 {
+			compatible = "riscv,htif";
+			reg = <0x80001000 0x10>;
+			status = "okay";
+		};
+	};
+};

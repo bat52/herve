@@ -14,6 +14,8 @@ The name "Herve" is a French person's name that happens to have similar pronunci
 - **Advanced Profiling** — Built-in instruction and function-level profiling with cycle-accurate architecture models
 - **AHB-Lite GPIO testcase** — Full example of bus-level peripheral integration
 - **Interrupt support** — External interrupt handling via DPI-C
+- **Machine Timer** — RISC-V mtime/mtimecmp with cycle-accurate Verilator peripheral
+- **Zephyr RTOS support** — Board files, device tree, and boot harness for running Zephyr
 - **Benchmarked** — 9,879× faster than Spike on riscv-tests ISA suite (51/51 tests passing)
 
 ## Quick Start
@@ -361,6 +363,7 @@ herve/
 │   ├── firmware_ahb.S          # Firmware for AHB-Lite GPIO test
 │   ├── firmware_irq.S          # Firmware for IRQ test
 │   ├── firmware_muldiv.S       # Firmware for MUL/DIV test
+│   ├── firmware_timer.S        # Firmware for machine timer test
 │   ├── herve_benchmark.csv     # Herve benchmark raw data
 │   ├── spike_benchmark.csv     # Spike benchmark raw data
 │   ├── docs/
@@ -368,15 +371,27 @@ herve/
 │   │   ├── benchmark_results.md # Detailed benchmark analysis
 │   │   ├── integration.md      # DPI/VPI integration guide
 │   │   ├── isa_support.md      # ISA support details
-│   │   └── modelsim.md         # ModelSim DPI-C integration guide
+│   │   ├── modelsim.md         # ModelSim DPI-C integration guide
+│   │   └── zephyr.md           # Zephyr RTOS integration guide
 │   ├── sim/
 │   │   ├── iss/                # ISS core (rv32_dpi.c, test harnesses)
 │   │   ├── harness/            # Verilator testbench harnesses
+│   │   │   ├── tb_top.sv       # Basic GPIO testbench
+│   │   │   ├── tb_top_ahb.sv   # AHB-Lite GPIO testbench
+│   │   │   ├── tb_top_zephyr.sv # Timer + GPIO testbench for Zephyr
+│   │   │   ├── rv32_dpi_tb.cpp # Basic test harness
+│   │   │   ├── rv32_dpi_irq_tb.cpp # IRQ test harness
+│   │   │   ├── rv32_dpi_ahb_tb.cpp # AHB test harness
+│   │   │   ├── rv32_dpi_zephyr_tb.cpp # Timer test harness
+│   │   │   └── rv32_dpi_zephyr_boot_tb.cpp # Zephyr boot harness
 │   │   ├── vpi/                # Icarus VPI wrapper
 │   │   ├── icarus/             # Icarus testbenches
 │   │   ├── modelsim/           # ModelSim DPI-C bridge and testbenches
 │   │   ├── bus/                # AHB-Lite BFM
-│   │   └── dut/                # AHB GPIO DUT
+│   │   └── dut/                # AHB GPIO + rv_timer DUTs
+│   └── zephyr/                 # Zephyr RTOS board support
+│       ├── README.md           # Build instructions
+│       └── boards/riscv/herve/ # Board definition files
 │   └── tests/                  # Test scripts and analysis tools
 └── riscv-tests/                # riscv-tests submodule (ISA tests)
 ```

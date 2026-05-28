@@ -1,0 +1,5 @@
+# Herve RISC-V ISS board configuration
+
+config BOARD_HERVE
+	bool "Herve RISC-V ISS"
+	depends on SOC_RISCV32_P
