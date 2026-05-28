@@ -85,7 +85,7 @@ herve
 llm/pi-whatsapp-connector/*
 
 # Telegram connector
-llm/pi-telegram-connector/*
+# llm/pi-telegram-connector/*
 *.ts
 
 dpi-riscv/profile.csv
