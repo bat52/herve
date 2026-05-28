@@ -133,7 +133,7 @@ draggable resize divider. Use the **Root** dropdown to pick any function as
 the hierarchy root (defaults to ``main``) and the **Depth** slider to limit
 nesting.
 
-![Profiler visualizer showing a Dhrystone profile](scripts/profiler_screenshot.png)
+![Profiler visualizer showing a Dhrystone profile](dpi-riscv/scripts/profiler_screenshot.png)
 
 **Notes**
 
