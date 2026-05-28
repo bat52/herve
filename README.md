@@ -428,37 +428,6 @@ bash agent.sh
 | `install_gemini_cli.sh` | Sets up a Node.js project with Google's Generative AI SDK |
 | `install_ollama_deepseek.sh` | Installs Ollama and pulls the DeepSeek Coder model |
 | `install_openclaw.sh` | Clones and installs the OpenClaw project in `~/openclaw` |
-| `install_pi_whatsapp_connector.sh` | Installs the WhatsApp connector for pi (see below) |
-| `pi-whatsapp-connector/` | WhatsApp ↔ pi-coding-agent bridge |
-
-### `llm/pi-whatsapp-connector/` — WhatsApp ↔ pi Bridge
-
-A [pi-coding-agent](https://pi.dev) connector that lets you chat with pi through **WhatsApp**.
-Send a message to your WhatsApp number and pi responds with AI-powered coding assistance.
-
-**How it works:**
-
-```
-WhatsApp ──► pi-whatsapp-connector ──► pi-coding-agent SDK ──► LLM
-               │                                               │
-               ◄────────────────── response ◄──────────────────┘
-```
-
-**Quick start:**
-
-```bash
-cd llm/pi-whatsapp-connector
-npm install
-node index.mjs
-# Scan the QR code with WhatsApp → Linked Devices → Link a Device
-```
-
-**Requirements:** Node.js >= 18, a WhatsApp account.
-
-Built with [baileys](https://github.com/WhiskeySockets/Baileys) (WhatsApp Web library) and the [pi SDK](https://pi.dev).
-Inspired by the [OpenClaw WhatsApp channel](https://github.com/openclaw/openclaw/tree/main/extensions/whatsapp).
-
-See [pi-whatsapp-connector/README.md](llm/pi-whatsapp-connector/README.md) for full documentation.
 
 ## License
 
