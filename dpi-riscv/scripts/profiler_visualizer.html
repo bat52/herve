@@ -1,0 +1,1139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Herve Profiler Visualizer</title>
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+
+header {
+  background: #16213e;
+  padding: 12px 24px;
+  display: flex; align-items: center; gap: 20px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #0f3460;
+}
+header h1 { font-size: 20px; color: #e94560; }
+header .subtitle { color: #888; font-size: 13px; }
+
+.controls-bar {
+  background: #16213e;
+  padding: 10px 24px;
+  display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  border-bottom: 1px solid #0f3460;
+}
+.controls-bar label { font-size: 13px; color: #aaa; }
+.controls-bar select, .controls-bar input[type=range], .controls-bar input[type=file] {
+  font-size: 13px; padding: 4px 8px; border-radius: 4px; border: 1px solid #0f3460;
+  background: #1a1a2e; color: #e0e0e0;
+}
+.controls-bar .val { font-size: 12px; color: #e94560; min-width: 24px; }
+#fileLabel {
+  background: #e94560; color: #fff; padding: 6px 14px; border-radius: 4px;
+  cursor: pointer; font-size: 13px; font-weight: 600;
+}
+#fileLabel:hover { background: #ff6b81; }
+#fileInput { display: none; }
+
+/* ========== main split layout ========== */
+.main-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.pane {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.pane-header {
+  background: #16213e;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e94560;
+  border-bottom: 1px solid #0f3460;
+  flex-shrink: 0;
+}
+.pane-left {
+  flex: 1 1 40%;
+  min-width: 200px;
+  border-right: 1px solid #0f3460;
+}
+.pane-right {
+  flex: 1 1 60%;
+  min-width: 200px;
+}
+
+/* resize handle */
+.resize-handle {
+  width: 6px;
+  cursor: col-resize;
+  background: #0f3460;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 10;
+}
+.resize-handle:hover,
+.resize-handle.active {
+  background: #e94560;
+}
+
+/* ========== hierarchy tree ========== */
+#hierarchyPanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.tree-node { margin-left: 0; }
+.tree-row {
+  display: flex; align-items: center; padding: 4px 8px; border-radius: 4px;
+  cursor: default; font-size: 13px; gap: 8px;
+}
+.tree-row:hover { background: rgba(233,69,96,0.1); }
+.tree-toggle {
+  width: 18px; height: 18px; cursor: pointer; text-align: center;
+  color: #888; font-size: 12px; user-select: none; flex-shrink: 0;
+}
+.tree-toggle.expanded::before { content: '▼'; }
+.tree-toggle.collapsed::before { content: '▶'; }
+.tree-toggle.leaf { visibility: hidden; }
+.tree-func { font-weight: 600; min-width: 100px; }
+.tree-cycles { color: #ffa500; min-width: 90px; }
+.tree-pct { color: #aaa; min-width: 60px; }
+.tree-parent-pct { color: #666; min-width: 80px; font-size: 12px; }
+.tree-children { margin-left: 24px; }
+
+/* ========== plot pane ========== */
+#plotContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  position: relative;
+  min-height: 0;
+}
+#plotContainer .chart-box {
+  width: 100%;
+  flex: 1;
+  min-height: 200px;
+  background: #16213e;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #0f3460;
+  display: flex;
+  flex-direction: column;
+}
+#plotContainer .chart-box h3 {
+  font-size: 14px;
+  margin-bottom: 10px;
+  color: #e94560;
+  flex-shrink: 0;
+}
+#plotContainer .chart-box canvas {
+  width: 100%;
+  flex: 1;
+  display: block;
+  min-height: 100px;
+}
+#icicleCanvas {
+  width: 100%;
+  flex: 1;
+  display: block;
+  min-height: 100px;
+  cursor: pointer;
+}
+#icicleBreadcrumb {
+  background: rgba(22,33,62,0.95);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #ccc;
+  flex-shrink: 0;
+  margin-top: 6px;
+  border: 1px solid #0f3460;
+  cursor: pointer;
+  user-select: none;
+}
+#icicleBreadcrumb span:hover {
+  color: #e94560;
+}
+
+/* status bar */
+#status {
+  padding: 8px 24px; font-size: 13px; color: #888;
+  background: #16213e; border-top: 1px solid #0f3460;
+  flex-shrink: 0;
+}
+
+@media (max-width: 700px) {
+  .main-split { flex-direction: column; }
+  .pane-left { border-right: none; border-bottom: 1px solid #0f3460; }
+  .resize-handle { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔬 Herve Profiler</h1>
+  <span class="subtitle">RISC-V execution visualization</span>
+</header>
+
+<div class="controls-bar">
+  <label for="fileInput" id="fileLabel">📂 Load JSON</label>
+  <input type="file" id="fileInput" accept=".json">
+  <label>Root:</label>
+  <select id="rootSelect"><option value="">— top level —</option></select>
+  <label>Depth:</label>
+  <input type="range" id="depthSlider" min="1" max="10" value="3">
+  <span class="val" id="depthVal">3</span>
+  <label>Plot:</label>
+  <select id="plotType">
+    <option value="icicle">🟦 Icicle</option>
+    <option value="pie">🥧 Sunburst</option>
+    <option value="flame" selected>🔥 Flamegraph</option>
+    <option value="treemap">▯ Treemap</option>
+  </select>
+  <label id="totalLabel" style="color:#aaa;">No data loaded</label>
+</div>
+
+<!-- ============ main split ============ -->
+<div class="main-split">
+  <!-- left: call hierarchy -->
+  <div class="pane pane-left">
+    <div class="pane-header">🌳 Call Hierarchy</div>
+    <div id="hierarchyPanel"></div>
+  </div>
+  <!-- resize handle -->
+  <div class="resize-handle" id="resizeHandle"></div>
+  <!-- right: plot -->
+  <div class="pane pane-right">
+    <div class="pane-header">📊 Plot</div>
+    <div id="plotContainer">
+      <!-- Icicle -->
+      <div class="chart-box" id="icicleBox">
+        <h3>🟦 Zoomable Icicle</h3>
+        <canvas id="icicleCanvas"></canvas>
+        <div id="icicleBreadcrumb"></div>
+      </div>
+      <!-- Pie -->
+      <div class="chart-box" id="pieBox" style="display:none;">
+        <h3>🥧 Sunburst (hierarchical ring chart)</h3>
+        <canvas id="pieCanvas"></canvas>
+      </div>
+      <!-- Flamegraph -->
+      <div class="chart-box" id="flameBox" style="display:none;">
+        <h3>🔥 Flamegraph</h3>
+        <canvas id="flameCanvas"></canvas>
+      </div>
+      <!-- Treemap -->
+      <div class="chart-box" id="treemapBox" style="display:none;">
+        <h3>▯ Treemap</h3>
+        <canvas id="treemapCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="status">Ready. Load a profiler JSON file to begin.</div>
+
+<script>
+let profileData = null;
+let currentRoot = null;
+let currentDepth = 3;
+// ----- zoomable icicle state -----
+let icicleStack = [];        // navigation stack [{rootNode, level}]
+let icicleAnimId = null;
+let icicleAnimState = null;  // {fromRects, toRects, progress, duration}
+const icicleColors = ['#e94560','#0f3460','#ffa500','#00b4d8','#90be6d','#f9c74f',
+                      '#f9844a','#577590','#43aa8b','#4d908e','#e09f3e','#9c89b8'];
+
+// ----- colour helpers -----
+function hotColor(t) {
+  const r = Math.round(255 * t);
+  const g = Math.round(255 * (1 - t));
+  const b = 80;
+  return `rgb(${r},${g},${b})`;
+}
+function hotColorObj(t) {
+  return { r: t, g: 1 - t, b: 0.31 };
+}
+
+// ========== plot type selector ==========
+function getPlotType() {
+  return document.getElementById('plotType').value;
+}
+
+document.getElementById('plotType').addEventListener('change', () => {
+  switchPlotBox(getPlotType());
+  renderAll();
+});
+
+function switchPlotBox(type) {
+  const ids = ['icicleBox', 'pieBox', 'flameBox', 'treemapBox'];
+  for (const id of ids) {
+    document.getElementById(id).style.display = id === type + 'Box' ? 'flex' : 'none';
+  }
+}
+
+// ========== resize handle ==========
+(function() {
+  const handle = document.getElementById('resizeHandle');
+  const left = handle.parentElement.querySelector('.pane-left');
+  const right = handle.parentElement.querySelector('.pane-right');
+  let isResizing = false;
+
+  handle.addEventListener('mousedown', e => {
+    isResizing = true;
+    handle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!isResizing) return;
+    const total = left.parentElement.offsetWidth;
+    const handleW = handle.offsetWidth;
+    let leftPct = ((e.clientX - left.parentElement.getBoundingClientRect().left) / total) * 100;
+    leftPct = Math.max(15, Math.min(85, leftPct));
+    // adjust for handle width
+    const usable = total - handleW;
+    const leftPx = (leftPct / 100) * usable;
+    left.style.flex = `0 0 ${leftPx}px`;
+    right.style.flex = `1 1 ${usable - leftPx}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isResizing) {
+      isResizing = false;
+      handle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
+})();
+
+// ========== JSON loading ==========
+document.getElementById('fileInput').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      profileData = JSON.parse(ev.target.result);
+      onDataLoaded();
+    } catch (err) {
+      setStatus('Error parsing JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+});
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+// ========== data handling ==========
+function buildHierarchy(funcName, depth) {
+  if (!profileData) return null;
+  const funcs = profileData.functions;
+  const meta = profileData.meta || {};
+  const totalCycles = meta.total_cycles || 1;
+
+  function build(name, d) {
+    const f = funcs[name];
+    if (!f) return null;
+    const node = {
+      name: name,
+      total_cycles: f.total_cycles || 0,
+      calls: f.calls || 0,
+      cycles_per_call: f.cycles_per_call || 0,
+      pct: ((f.total_cycles || 0) / totalCycles) * 100,
+      instructions: f.instructions || {},
+      children: []
+    };
+    if (d > 0 && f.sub_functions) {
+      for (const [cname, info] of Object.entries(f.sub_functions)) {
+        const child = build(cname, d - 1);
+        if (child) {
+          child.parent_pct = node.total_cycles > 0
+            ? (child.total_cycles / node.total_cycles) * 100 : 0;
+          node.children.push(child);
+        }
+      }
+    }
+    node.children.sort((a, b) => b.total_cycles - a.total_cycles);
+    return node;
+  }
+  return build(funcName, depth);
+}
+
+function getTopFunctions() {
+  if (!profileData) return [];
+  return Object.entries(profileData.functions)
+    .sort((a, b) => b[1].total_cycles - a[1].total_cycles);
+}
+
+function onDataLoaded() {
+  if (!profileData) return;
+  const tops = getTopFunctions();
+  const meta = profileData.meta || {};
+  const totalCycles = meta.total_cycles || 0;
+
+  setStatus(`Loaded: ${tops.length} functions, ${totalCycles.toLocaleString()} total cycles`);
+
+  const sel = document.getElementById('rootSelect');
+  sel.innerHTML = '';
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = '— top level —';
+  sel.appendChild(noneOpt);
+  for (const [name] of tops) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  // Default to 'main' if it exists, otherwise empty (top-level)
+  const mainOpt = sel.querySelector('option[value="main"]');
+  if (mainOpt) {
+    sel.value = 'main';
+    currentRoot = 'main';
+  } else {
+    sel.value = '';
+    currentRoot = null;
+  }
+
+  const totalLabel = document.getElementById('totalLabel');
+  totalLabel.textContent = `Total: ${totalCycles.toLocaleString()} cycles` +
+    (meta.arch ? `  |  Arch: ${meta.arch}` : '') +
+    (meta.isa ? `  |  ISA: ${meta.isa}` : '');
+
+  renderAll();
+  renderHierarchy();
+}
+
+// ========== controls ==========
+document.getElementById('rootSelect').addEventListener('change', function() {
+  currentRoot = this.value || null;
+  renderAll();
+  renderHierarchy();
+});
+document.getElementById('depthSlider').addEventListener('input', function() {
+  currentDepth = parseInt(this.value);
+  document.getElementById('depthVal').textContent = currentDepth;
+  renderAll();
+  renderHierarchy();
+});
+window.addEventListener('resize', () => {
+  // re-render on window resize so canvases adapt
+  renderAll();
+});
+
+// ============================================================
+//   ZOOMABLE ICICLE (canvas2D partition layout)
+// ============================================================
+// ============================================================
+//   ZOOMABLE ICICLE (canvas2D partition layout)
+// ============================================================
+
+function layoutIcicle(node, canvasW, rowH) {
+  // Flatten hierarchy into rows, computing x/width for each node
+  // Returns {allRects, rows} where allRects is flat array of {node, x, y, w, h}
+  const allRects = [];
+  const rows = [];
+  const total = node.total_cycles || 1;
+
+  function collect(n, level, xOffset, parentTotal) {
+    if (!n) return;
+    while (rows.length <= level) rows.push([]);
+    const w = parentTotal > 0 ? (n.total_cycles / parentTotal) * canvasW : canvasW;
+    const h = rowH;
+    const y = level * rowH;
+    const rect = { node: n, x: xOffset, y: y, w: w, h: h, level: level };
+    allRects.push(rect);
+    rows[level].push(rect);
+
+    if (n.children.length > 0) {
+      let cx = xOffset;
+      for (const child of n.children) {
+        collect(child, level + 1, cx, n.total_cycles);
+        cx += (child.total_cycles / n.total_cycles) * w;
+      }
+    }
+  }
+
+  collect(node, 0, 0, total);
+  return { allRects, rows };
+}
+
+function drawIcicle(canvas, layout, focusNode, totalCycles) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!layout || !layout.allRects || layout.allRects.length === 0) {
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const maxVisY = canvas.height;
+  const pad = 2;
+
+  for (const r of layout.allRects) {
+    if (r.y + r.h < 0 || r.y > maxVisY) continue;
+    const rx = r.x + pad;
+    const ry = r.y + pad;
+    const rw = Math.max(0, r.w - pad * 2);
+    const rh = Math.max(0, r.h - pad * 2);
+    if (rw <= 0 || rh <= 0) continue;
+
+    const t = totalCycles > 0 ? r.node.total_cycles / totalCycles : 0;
+    const ci = Math.floor(t * (icicleColors.length - 1));
+    ctx.fillStyle = icicleColors[Math.min(ci, icicleColors.length - 1)];
+    ctx.fillRect(rx, ry, rw, rh);
+
+    // Lighter border for the focus row
+    if (r.level === 0) {
+      ctx.strokeStyle = '#e94560';
+      ctx.lineWidth = 2;
+    } else {
+      ctx.strokeStyle = '#1a1a2e';
+      ctx.lineWidth = 1;
+    }
+    ctx.strokeRect(rx, ry, rw, rh);
+
+    // Label
+    if (rw > 30 && rh > 16) {
+      ctx.fillStyle = '#fff';
+      ctx.font = (rw > 60 ? 'bold 11px' : 'bold 9px') + ' sans-serif';
+      ctx.textAlign = 'left';
+      const label = r.node.name.length > Math.floor(rw / 7)
+        ? r.node.name.slice(0, Math.max(2, Math.floor(rw / 7) - 1)) + '…'
+        : r.node.name;
+      ctx.fillText(label, rx + 4, ry + 12);
+
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = '#ffa500';
+      const pct = ((r.node.total_cycles / totalCycles) * 100).toFixed(1);
+      ctx.fillText(`${pct}%`, rx + 4, ry + rh - 4);
+    }
+  }
+
+  // Draw level labels on the left if there's room
+  ctx.textAlign = 'left';
+  ctx.font = '10px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText('Click a rectangle to zoom in. Click breadcrumb to go back.', 8, canvas.height - 6);
+}
+
+function updateBreadcrumb() {
+  const el = document.getElementById('icicleBreadcrumb');
+  if (!el) return;
+  if (icicleStack.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  let html = '🔍 ';
+  for (let i = 0; i < icicleStack.length; i++) {
+    const entry = icicleStack[i];
+    const name = entry.node ? entry.node.name : '(root)';
+    if (i === icicleStack.length - 1) {
+      html += `<strong style="color:#e94560;">${name}</strong>`;
+    } else {
+      html += '<span data-idx="' + i + '">' + name + '</span> <span style="color:#555;">›</span> ';
+    }
+  }
+  el.innerHTML = html;
+
+  // Click handlers for breadcrumb links
+  el.querySelectorAll('span[data-idx]').forEach(sp => {
+    sp.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const idx = parseInt(this.dataset.idx);
+      zoomToIcicle(idx);
+    });
+  });
+}
+
+function zoomToIcicle(stackIdx) {
+  // Zoom to the node at icicleStack[stackIdx]
+  if (stackIdx < 0) stackIdx = 0;
+  if (stackIdx >= icicleStack.length) return;
+  icicleStack = icicleStack.slice(0, stackIdx + 1);
+  renderIcicle(icicleStack[stackIdx].node);
+}
+
+function renderIcicle(focusNode) {
+  const canvas = document.getElementById('icicleCanvas');
+  if (!canvas) return;
+  const parent = canvas.parentElement;
+  const w = parent.offsetWidth || 600;
+  const h = parent.offsetHeight || 400;
+  canvas.width = Math.max(w - 32, 100);
+  canvas.height = Math.max(h - 48, 100);
+
+  if (!focusNode) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const rowH = Math.max(30, Math.min(50, (canvas.height - 24) / 8));
+  const layout = layoutIcicle(focusNode, canvas.width, rowH);
+  drawIcicle(canvas, layout, focusNode, focusNode.total_cycles || 1);
+
+  // Attach click handler for zoom
+  canvas.onclick = function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    // Scale to canvas coords
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = mx * scaleX;
+    const cy = my * scaleY;
+
+    for (const r of layout.allRects) {
+      if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) {
+        if (r.node.children && r.node.children.length > 0) {
+          // Zoom into this node
+          icicleStack.push({ node: r.node, level: r.level });
+          updateBreadcrumb();
+          renderIcicle(r.node);
+        }
+        break;
+      }
+    }
+  };
+
+  updateBreadcrumb();
+}
+
+function initIcicle(rootNode) {
+  icicleStack = [{ node: rootNode, level: 0 }];
+  renderIcicle(rootNode);
+}
+
+// ============================================================
+//   SUNBURST (hierarchical ring chart)
+// ============================================================
+function renderSunburst(rootNode) {
+  const canvas = document.getElementById('pieCanvas');
+  if (!canvas || canvas.offsetParent === null) return;
+  const w = canvas.parentElement.offsetWidth || 420;
+  const h = canvas.parentElement.offsetHeight || 360;
+  canvas.width = Math.max(w - 32, 100);
+  canvas.height = Math.max(h - 48, 100);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!rootNode) {
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const maxRadius = Math.min(cx, cy) * 0.85;
+  const ringCount = 4;
+  const ringThickness = maxRadius / ringCount;
+  const totalCycles = rootNode.total_cycles || 1;
+
+  function truncate(str, maxLen) {
+    return str.length > maxLen ? str.slice(0, maxLen - 1) + '…' : str;
+  }
+
+  // Recursively draw rings
+  function drawRing(node, level, startAngle, angleSpan, parentTotal) {
+    if (!node || level >= ringCount) return;
+    const rInner = level * ringThickness;
+    const rOuter = rInner + ringThickness - (level === 0 ? 2 : 1);
+
+    // Draw the segment for this node
+    if (level > 0 || (level === 0 && angleSpan < Math.PI * 2 - 0.001)) {
+      const t = node.total_cycles / totalCycles;
+      const col = hotColor(t);
+      ctx.beginPath();
+      ctx.arc(cx, cy, rOuter, startAngle, startAngle + angleSpan);
+      ctx.arc(cx, cy, rInner, startAngle + angleSpan, startAngle, true);
+      ctx.closePath();
+      ctx.fillStyle = col;
+      ctx.fill();
+      ctx.strokeStyle = '#1a1a2e';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (level === 0) {
+      // The root circle (full center)
+      const t = node.total_cycles / totalCycles;
+      const col = hotColor(t);
+      ctx.beginPath();
+      ctx.arc(cx, cy, rOuter, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fillStyle = col;
+      ctx.fill();
+      ctx.strokeStyle = '#1a1a2e';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Label at segment center if big enough
+    const midAngle = startAngle + angleSpan / 2;
+    const labelR = (rInner + rOuter) / 2;
+    const segW = angleSpan * labelR;
+    const segH = rOuter - rInner;
+    if (segW > 18 && segH > 14) {
+      const lx = cx + Math.cos(midAngle) * labelR;
+      const ly = cy + Math.sin(midAngle) * labelR;
+      // Draw label background
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(lx - 24, ly - 10, 48, 20);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(truncate(node.name, 8), lx, ly - 3);
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = '#ffa500';
+      const pct = (node.total_cycles / totalCycles * 100);
+      ctx.fillText(`${pct.toFixed(1)}%`, lx, ly + 9);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // Draw children as next ring
+    if (node.children.length > 0) {
+      const totalChildCycles = node.children.reduce((s, c) => s + c.total_cycles, 0);
+      let childStart = startAngle;
+      for (const child of node.children) {
+        const childSpan = totalChildCycles > 0
+          ? angleSpan * (child.total_cycles / totalChildCycles)
+          : 0;
+        drawRing(child, level + 1, childStart, childSpan, totalChildCycles);
+        childStart += childSpan;
+      }
+    }
+  }
+
+  // Start drawing from root
+  drawRing(rootNode, 0, 0, Math.PI * 2, totalCycles);
+
+  // Title in top-left
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`Root: ${rootNode.name}  |  ${rootNode.total_cycles.toLocaleString()} cycles (${rootNode.pct.toFixed(1)}%)`, 8, 8);
+}
+
+// ============================================================
+//   FLAMEGRAPH
+// ============================================================
+function renderFlamegraph(rootNode) {
+  const canvas = document.getElementById('flameCanvas');
+  if (!canvas || canvas.offsetParent === null) return;
+  const w = canvas.parentElement.offsetWidth || 840;
+  const h = canvas.parentElement.offsetHeight || 480;
+  canvas.width = Math.max(w - 32, 200);
+  canvas.height = Math.max(h - 48, 200);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!rootNode) {
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const totalCycles = rootNode.total_cycles || 1;
+  const barHeight = 28;
+
+  const rows = [];
+  function collect(node, level) {
+    while (rows.length <= level) rows.push([]);
+    rows[level].push(node);
+    for (const child of node.children) collect(child, level + 1);
+  }
+  collect(rootNode, 0);
+
+  const maxY = Math.min(rows.length, Math.floor(canvas.height / barHeight));
+  const visRows = rows.slice(0, maxY);
+  const rowHeight = barHeight + 4;
+  let yPos = 10;
+
+  for (let ri = 0; ri < Math.min(visRows.length, 8); ri++) {
+    const row = visRows[ri];
+    let xPos = 0;
+    for (const node of row) {
+      const w = Math.max(30, (node.total_cycles / totalCycles) * (canvas.width - 20) - 4);
+      const col = hotColor(node.total_cycles / totalCycles);
+      ctx.fillStyle = col;
+      ctx.fillRect(xPos + 10, yPos, w, barHeight);
+      ctx.strokeStyle = '#1a1a2e';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(xPos + 10, yPos, w, barHeight);
+      if (w > 50) {
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(node.name, xPos + 13, yPos + 12);
+        ctx.font = '9px sans-serif';
+        ctx.fillStyle = '#ffa500';
+        const pct = (node.total_cycles / totalCycles * 100).toFixed(1);
+        ctx.fillText(`${pct}%`, xPos + 13, yPos + 22);
+      }
+      xPos += w + 4;
+    }
+    yPos += rowHeight;
+  }
+
+  // Draw instruction breakdown for root
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  let ix = 20;
+  let iy = yPos + 20;
+  ctx.fillStyle = '#e94560';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText('Instruction Breakdown:', ix, iy);
+  iy += 18;
+  if (rootNode.instructions) {
+    const sorted = Object.entries(rootNode.instructions)
+      .sort((a, b) => b[1].cycles - a[1].cycles);
+    for (const [type, info] of sorted) {
+      ctx.fillStyle = '#e0e0e0';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(`${type}:`, ix + 8, iy);
+      ctx.fillStyle = '#ffa500';
+      ctx.fillText(`${info.cycles.toLocaleString()} cycles`, ix + 80, iy);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText(`(${info.count.toLocaleString()} insns)`, ix + 190, iy);
+      iy += 16;
+      if (iy > canvas.height - 10) break;
+    }
+  }
+}
+
+// ============================================================
+//   TREEMAP (squarified layout)
+// ============================================================
+function squarify(children, x, y, w, h) {
+  // Standard Bruls–Huizing–van Wijk squarified treemap
+  if (!children || children.length === 0) return [];
+  const total = children.reduce((s, c) => s + c.value, 0);
+  if (total <= 0) return [];
+  const rects = [];
+  // Sort descending by value
+  const sorted = children.map((c, i) => ({...c, idx: i}))
+    .sort((a, b) => b.value - a.value);
+
+  // worst aspect ratio for a row candidate given the longer side <len>
+  function worst(row, len) {
+    if (row.length === 0) return Infinity;
+    const rowSum = row.reduce((s, c) => s + c.value, 0);
+    const l = Math.max(len, 1);
+    let maxR = 0;
+    for (const c of row) {
+      const r = (l * l * c.value) / (rowSum * rowSum);
+      const ratio = Math.max(r, 1 / r);
+      if (ratio > maxR) maxR = ratio;
+    }
+    return maxR;
+  }
+
+  // Layout `row` items inside (rx, ry, rw, rh), returning remaining rect
+  function layoutRow(row, rx, ry, rw, rh) {
+    const rowSum = row.reduce((s, c) => s + c.value, 0);
+    if (rowSum <= 0) return { x: rx, y: ry, w: rw, h: rh };
+    let curX = rx, curY = ry;
+    const isHoriz = rw >= rh;
+    for (const c of row) {
+      const f = c.value / rowSum;
+      if (isHoriz) {
+        // Vertically stacked: full width, height proportional
+        const ch = rh * f;
+        rects.push({ x: curX, y: curY, w: rw, h: ch, node: c.node, value: c.value });
+        curY += ch;
+      } else {
+        // Horizontally stacked: full height, width proportional
+        const cw = rw * f;
+        rects.push({ x: curX, y: curY, w: cw, h: rh, node: c.node, value: c.value });
+        curX += cw;
+      }
+    }
+    // Return remaining space (full dimension along the stacking axis is consumed)
+    if (isHoriz) return { x: rx, y: curY, w: rw, h: rh - (curY - ry) };
+    else return { x: curX, y: ry, w: rw - (curX - rx), h: rh };
+  }
+
+  // Recursive squarification
+  function squarifyInner(items, rx, ry, rw, rh, itemTotal) {
+    if (items.length === 0) return;
+    if (items.length === 1) {
+      rects.push({ x: rx, y: ry, w: rw, h: rh, node: items[0].node, value: items[0].value });
+      return;
+    }
+    const isHoriz = rw >= rh;
+    const len = isHoriz ? rh : rw;  // shorter side
+    let row = [];
+    let remaining = [...items];
+    while (remaining.length > 0) {
+      const next = remaining[0];
+      const newRow = [...row, next];
+      const oldWorst = worst(row, len);
+      const newWorst = worst(newRow, len);
+      if (row.length > 0 && newWorst > oldWorst) {
+        break;  // row is complete
+      } else {
+        row.push(next);
+        remaining = remaining.slice(1);
+      }
+    }
+    // remaining now holds items after the row
+
+    const rowSum = row.reduce((s, c) => s + c.value, 0);
+    // The row gets a PROPORTIONAL slice of the available rect
+    if (isHoriz) {
+      const rowH = rh * (rowSum / itemTotal);
+      layoutRow(row, rx, ry, rw, rowH);
+      squarifyInner(remaining, rx, ry + rowH, rw, rh - rowH, itemTotal - rowSum);
+    } else {
+      const rowW = rw * (rowSum / itemTotal);
+      layoutRow(row, rx, ry, rowW, rh);
+      squarifyInner(remaining, rx + rowW, ry, rw - rowW, rh, itemTotal - rowSum);
+    }
+  }
+
+  squarifyInner(sorted, x, y, w, h, total);
+  return rects;
+}
+
+function renderTreemap(rootNode) {
+  const canvas = document.getElementById('treemapCanvas');
+  if (!canvas || canvas.offsetParent === null) return;
+  const w = canvas.parentElement.offsetWidth || 420;
+  const h = canvas.parentElement.offsetHeight || 360;
+  canvas.width = Math.max(w - 32, 100);
+  canvas.height = Math.max(h - 48, 100);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!rootNode) {
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const total = rootNode.total_cycles || 1;
+  const padding = 3;
+
+  // Use immediate children of the selected root (consistent with other plots)
+  let items;
+  if (rootNode.children.length > 0) {
+    items = rootNode.children.map(c => ({
+      name: c.name,
+      value: c.total_cycles,
+      pct: (c.total_cycles / total) * 100,
+      node: c
+    }));
+  } else {
+    items = [{ name: rootNode.name, value: rootNode.total_cycles, pct: 100, node: rootNode }];
+  }
+  items.sort((a, b) => b.value - a.value);
+  const rects = squarify(items.map(it => ({ value: it.value, node: it })),
+                         0, 0, canvas.width, canvas.height);
+
+  function truncate(str, maxLen) {
+    return str.length > maxLen ? str.slice(0, maxLen - 1) + '…' : str;
+  }
+
+  for (const r of rects) {
+    const rx = r.x + padding;
+    const ry = r.y + padding;
+    const rw = Math.max(0, r.w - padding * 2);
+    const rh = Math.max(0, r.h - padding * 2);
+    if (rw <= 0 || rh <= 0) continue;
+    const t = r.value / total;
+    const col = hotColor(t);
+    ctx.fillStyle = col;
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx, ry, rw, rh);
+    if (rw > 40 && rh > 24) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(truncate(r.node.name, Math.floor(rw / 7)), rx + 4, ry + 14);
+      ctx.font = '10px sans-serif';
+      ctx.fillStyle = '#ffa500';
+      const pct = (r.value / total * 100).toFixed(1);
+      ctx.fillText(`${pct}%`, rx + 4, ry + 26);
+    }
+  }
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`Root: ${rootNode.name}  |  ${rootNode.total_cycles.toLocaleString()} cycles`, canvas.width - 8, 14);
+}
+
+// ============================================================
+//   CALL HIERARCHY TREE
+// ============================================================
+function renderHierarchy() {
+  const panel = document.getElementById('hierarchyPanel');
+  if (!profileData) {
+    panel.innerHTML = '<p style="padding:20px;color:#888;">No data loaded.</p>';
+    return;
+  }
+
+  const tops = getTopFunctions();
+  const roots = [];
+  const calledSet = new Set();
+  if (profileData.call_edges) {
+    for (const edge of profileData.call_edges) {
+      calledSet.add(edge.callee);
+    }
+  }
+  for (const [name] of tops) {
+    if (!calledSet.has(name)) roots.push(name);
+  }
+  if (roots.length === 0) {
+    for (const [name] of tops.slice(0, 20)) roots.push(name);
+  }
+
+  const rootName = currentRoot || getTopFunctions()[0]?.[0] || null;
+  panel.innerHTML = '';
+  if (rootName) {
+    const rootNode = buildHierarchy(rootName, 999);
+    if (rootNode) {
+      const div = document.createElement('div');
+      div.className = 'tree-node';
+      renderTreeNode(div, rootNode, 0);
+      panel.appendChild(div);
+    }
+  } else {
+    for (const rootName of roots) {
+      const rootNode = buildHierarchy(rootName, 999);
+      if (rootNode) {
+        const div = document.createElement('div');
+        div.className = 'tree-node';
+        renderTreeNode(div, rootNode, 0);
+        panel.appendChild(div);
+      }
+    }
+  }
+}
+
+function renderTreeNode(container, node, level) {
+  const row = document.createElement('div');
+  row.className = 'tree-row';
+
+  const hasChildren = node.children.length > 0;
+  const toggle = document.createElement('span');
+  toggle.className = 'tree-toggle ' + (hasChildren ? 'collapsed' : 'leaf');
+  row.appendChild(toggle);
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'tree-func';
+  nameSpan.textContent = node.name;
+  row.appendChild(nameSpan);
+
+  const cyclesSpan = document.createElement('span');
+  cyclesSpan.className = 'tree-cycles';
+  cyclesSpan.textContent = `${node.total_cycles.toLocaleString()} cycles`;
+  row.appendChild(cyclesSpan);
+
+  const pctSpan = document.createElement('span');
+  pctSpan.className = 'tree-pct';
+  pctSpan.textContent = `${node.pct.toFixed(1)}%`;
+  row.appendChild(pctSpan);
+
+  if (node.parent_pct !== undefined) {
+    const ppSpan = document.createElement('span');
+    ppSpan.className = 'tree-parent-pct';
+    ppSpan.textContent = `(${node.parent_pct.toFixed(1)}% of parent)`;
+    row.appendChild(ppSpan);
+  }
+
+  const t = (profileData.meta.total_cycles > 0)
+    ? node.total_cycles / profileData.meta.total_cycles : 0;
+  row.style.background = `rgba(${Math.round(255 * t)}, ${Math.round(155 * (1 - t))}, 60, 0.12)`;
+
+  const childrenDiv = document.createElement('div');
+  childrenDiv.className = 'tree-children';
+  childrenDiv.style.display = 'none';
+
+  const sorted = [...node.children].sort((a, b) => b.total_cycles - a.total_cycles);
+  for (const child of sorted) {
+    renderTreeNode(childrenDiv, child, level + 1);
+  }
+
+  if (hasChildren) {
+    toggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const isExpanded = childrenDiv.style.display !== 'none';
+      childrenDiv.style.display = isExpanded ? 'none' : 'block';
+      toggle.className = 'tree-toggle ' + (isExpanded ? 'collapsed' : 'expanded');
+    });
+  }
+
+  container.appendChild(row);
+  container.appendChild(childrenDiv);
+}
+
+// ============================================================
+//   RENDER ALL
+// ============================================================
+function renderAll() {
+  if (!profileData) return;
+  const type = getPlotType();
+  const rootName = currentRoot || getTopFunctions()[0]?.[0] || null;
+  if (!rootName) {
+    if (type === 'icicle') renderIcicle(null);
+    else if (type === 'pie') renderSunburst(null);
+    else if (type === 'flame') renderFlamegraph(null);
+    else if (type === 'treemap') renderTreemap(null);
+    return;
+  }
+
+  const rootNode = buildHierarchy(rootName, currentDepth);
+  if (!rootNode) return;
+
+  if (type === 'icicle') initIcicle(rootNode);
+  else if (type === 'pie') renderSunburst(rootNode);
+  else if (type === 'flame') renderFlamegraph(rootNode);
+  else if (type === 'treemap') renderTreemap(rootNode);
+
+  // icicle shows its own overlay via the breadcrumb bar
+}
+
+// Initialize
+switchPlotBox('flame');
+setStatus('Ready. Load a profiler JSON file to begin.');
+</script>
+</body>
+</html>

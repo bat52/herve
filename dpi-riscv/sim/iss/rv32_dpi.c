@@ -1,4 +1,6 @@
+#define _GNU_SOURCE
 #include "rv32_dpi.h"
+#include "herve_profiler.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -53,11 +55,39 @@ static inline void trace_insn(uint32_t pc, uint32_t insn, const char *mnemonic,
 
 static uint8_t *memory = NULL;
 static uint32_t memory_size = 0;
+static uint32_t memory_base = 0;
 static uint32_t regs[32];
 static uint32_t pc = 0;
 static uint32_t irq_mask = 0;
 static bool wfi_sleep = false;
 static bool initialized = false;
+
+/* Symbol table for profiling */
+typedef struct {
+    uint32_t addr;
+    uint32_t size;
+    char *name;
+} symbol_t;
+
+static symbol_t *symbols = NULL;
+static uint32_t num_symbols = 0;
+
+static void add_symbol(uint32_t addr, uint32_t size, const char *name) {
+    symbols = (symbol_t *)realloc(symbols, (num_symbols + 1) * sizeof(symbol_t));
+    symbols[num_symbols].addr = addr;
+    symbols[num_symbols].size = size;
+    symbols[num_symbols].name = strdup(name);
+    num_symbols++;
+}
+
+const char* herve_get_symbol_at(uint32_t addr) {
+    for (uint32_t i = 0; i < num_symbols; i++) {
+        if (addr >= symbols[i].addr && addr < symbols[i].addr + symbols[i].size) {
+            return symbols[i].name;
+        }
+    }
+    return NULL;
+}
 
 /* CSR storage */
 static uint32_t csr_mstatus = 0;
@@ -75,8 +105,68 @@ extern void dpi_mmio_write(uint32_t addr, uint32_t value);
 }
 #endif
 
+/* HTIF state for riscv-tests benchmark compatibility */
+static uint32_t htif_tohost_lo = 0;
+static uint32_t htif_tohost_hi = 0;
+static uint32_t htif_fromhost_lo = 0;
+static uint32_t htif_fromhost_hi = 0;
+static bool htif_exit = false;
+static int htif_exit_code = 0;
+static bool htif_halted = false;
+
+/*
+ * Process an HTIF request after tohost has been written.
+ * Extracts the syscall from the request struct in memory.
+ */
+static void htif_process_request(void) {
+    /* Check for exit command: tohost & 1 == 1 means (exit_code << 1) | 1 */
+    if (htif_tohost_lo & 1) {
+        htif_exit_code = (int)(htif_tohost_lo >> 1);
+        htif_exit = true;
+        htif_halted = true;
+        return;
+    }
+    
+    /* tohost holds a pointer to a 32-byte request struct in guest memory */
+    uint32_t req_ptr = htif_tohost_lo;
+    if (req_ptr == 0) return;
+    
+    /* Read the request struct from guest memory */
+    uint32_t magic, syscall, arg_ptr, arg_count;
+    if (req_ptr >= memory_base && req_ptr < memory_base + memory_size) {
+        memcpy(&magic, &memory[req_ptr - memory_base], 4);
+        memcpy(&syscall, &memory[req_ptr - memory_base + 8], 4);
+        memcpy(&arg_ptr, &memory[req_ptr - memory_base + 16], 4);
+        memcpy(&arg_count, &memory[req_ptr - memory_base + 24], 4);
+    } else {
+        return;
+    }
+    
+    (void)arg_count;
+    
+    if (magic != 64) return;  /* Not an HTIF syscall */
+    
+    if (syscall == 1) {
+        /* putchar: read the character from the argument pointer */
+        if (arg_ptr >= memory_base && arg_ptr < memory_base + memory_size) {
+            uint8_t ch;
+            memcpy(&ch, &memory[arg_ptr - memory_base], 1);
+            putchar(ch);
+            fflush(stdout);
+        }
+    }
+    
+    /* Signal completion by setting fromhost to non-zero */
+    htif_fromhost_lo = 1;
+    htif_fromhost_hi = 0;
+}
+
+static inline bool is_htif_address(uint32_t addr) {
+    return (addr >= 0x80001000 && addr < 0x80001010);
+}
+
 static inline bool is_mmio_address(uint32_t addr) {
-    return addr >= MMIO_BASE && addr < MMIO_BASE + MMIO_SIZE;
+    return (addr >= MMIO_BASE && addr < MMIO_BASE + MMIO_SIZE);
 }
 
 static inline uint32_t sign_extend(uint32_t value, unsigned bits) {
@@ -85,24 +175,39 @@ static inline uint32_t sign_extend(uint32_t value, unsigned bits) {
 }
 
 static bool valid_memory_access(uint32_t addr, uint32_t width) {
-    return addr + width <= memory_size;
+    return (addr >= memory_base) && (addr - memory_base + width <= memory_size);
 }
 
 static uint32_t read_u32(uint32_t addr) {
+    /* HTIF fromhost reads */
+    if (is_htif_address(addr)) {
+        switch (addr) {
+            case 0x80001008: return htif_fromhost_lo;
+            case 0x8000100c: return htif_fromhost_hi;
+            default: return 0;
+        }
+    }
+
     if (is_mmio_address(addr)) {
         return dpi_mmio_read(addr);
     }
+
 
     if (!valid_memory_access(addr, 4)) {
         return 0;
     }
 
     uint32_t value;
-    memcpy(&value, &memory[addr], 4);
+    memcpy(&value, &memory[addr - memory_base], 4);
     return value;
 }
 
 static uint32_t read_u16(uint32_t addr) {
+    /* HTIF reads go through u32 path */
+    if (is_htif_address(addr)) {
+        return read_u32(addr);
+    }
+
     if (is_mmio_address(addr)) {
         return dpi_mmio_read(addr & ~0x3u) >> ((addr & 0x2u) * 8);
     }
@@ -112,11 +217,16 @@ static uint32_t read_u16(uint32_t addr) {
     }
 
     uint16_t value;
-    memcpy(&value, &memory[addr], 2);
+    memcpy(&value, &memory[addr - memory_base], 2);
     return value;
 }
 
 static uint32_t read_u8(uint32_t addr) {
+    /* HTIF reads go through u32 path */
+    if (is_htif_address(addr)) {
+        return read_u32(addr);
+    }
+
     if (is_mmio_address(addr)) {
         return dpi_mmio_read(addr & ~0x3u) >> ((addr & 0x3u) * 8);
     }
@@ -125,20 +235,46 @@ static uint32_t read_u8(uint32_t addr) {
         return 0;
     }
 
-    return memory[addr];
+    return memory[addr - memory_base];
 }
 
 static void write_u32(uint32_t addr, uint32_t value) {
+    /* HTIF tohost writes */
+    if (is_htif_address(addr)) {
+        switch (addr) {
+            case 0x80001000:
+                htif_tohost_lo = value;
+                /* When the full tohost value is written (both words), process it */
+                /* We don't know the order of writes, so process on each write */
+                /* But only if we have the full 64-bit value (hi=0 for 32-bit builds) */
+                if (value != 0) {
+                    htif_process_request();
+                }
+                return;
+            case 0x80001004:
+                htif_tohost_hi = value;
+                return;
+            case 0x80001008:
+                htif_fromhost_lo = value;
+                return;
+            case 0x8000100c:
+                htif_fromhost_hi = value;
+                return;
+        }
+        return;
+    }
+
     if (is_mmio_address(addr)) {
         dpi_mmio_write(addr, value);
         return;
     }
 
+
     if (!valid_memory_access(addr, 4)) {
         return;
     }
 
-    memcpy(&memory[addr], &value, 4);
+    memcpy(&memory[addr - memory_base], &value, 4);
 }
 
 static void write_u16(uint32_t addr, uint16_t value) {
@@ -156,7 +292,7 @@ static void write_u16(uint32_t addr, uint16_t value) {
         return;
     }
 
-    memcpy(&memory[addr], &value, 2);
+    memcpy(&memory[addr - memory_base], &value, 2);
 }
 
 static void write_u8(uint32_t addr, uint8_t value) {
@@ -174,7 +310,7 @@ static void write_u8(uint32_t addr, uint8_t value) {
         return;
     }
 
-    memory[addr] = value;
+    memory[addr - memory_base] = value;
 }
 
 static void write_reg(uint32_t reg, uint32_t value) {
@@ -516,6 +652,7 @@ static bool execute_compressed(uint16_t insn) {
 }
 
 static bool execute_instruction(uint32_t insn) {
+    herve_insn_type_t type = HERVE_INSN_ALU;
     uint32_t opcode = insn & 0x7fu;
     uint32_t rd = (insn >> 7) & 0x1fu;
     uint32_t funct3 = (insn >> 12) & 0x7u;
@@ -531,6 +668,8 @@ static bool execute_instruction(uint32_t insn) {
         case 0x33: // OP (register-register ALU)
             // M-extension: funct7 == 0x01
             if (funct7 == 0x01) {
+                if (funct3 < 4) type = HERVE_INSN_MUL;
+                else type = HERVE_INSN_DIV;
                 switch (funct3) {
                     case 0x0: // MUL
                         write_reg(rd, (uint32_t)((int64_t)(int32_t)src1 * (int64_t)(int32_t)src2));
@@ -571,9 +710,11 @@ static bool execute_instruction(uint32_t insn) {
                         break;
                 }
                 pc = next_pc;
+                if (herve_profiler_is_enabled()) herve_profiler_record_insn(type, pc - 4, insn);
                 return true;
             }
             // RV32I base OP instructions
+            type = HERVE_INSN_ALU;
             switch (funct3) {
                 case 0x0:
                     if (funct7 == 0x20) {
@@ -614,6 +755,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x13: // OP-IMM
+            type = HERVE_INSN_ALU;
             imm = sign_extend((insn >> 20), 12);
             switch (funct3) {
                 case 0x0:
@@ -669,6 +811,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x03: // LOAD
+            type = HERVE_INSN_LOAD;
             imm = sign_extend((insn >> 20), 12);
             {
                 uint32_t addr = src1 + imm;
@@ -696,6 +839,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x23: // STORE
+            type = HERVE_INSN_STORE;
             imm = ((insn >> 7) & 0x1f) | (((insn >> 25) & 0x7f) << 5);
             imm = sign_extend(imm, 12);
             {
@@ -716,6 +860,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x63: // BRANCH
+            type = HERVE_INSN_BRANCH;
             {
                 uint32_t imm_b = ((insn >> 7) & 0x1e) | ((insn >> 25) & 0x3f) << 5 | ((insn >> 7) & 0x1) << 11 | ((insn >> 31) << 12);
                 imm_b = sign_extend(imm_b, 13);
@@ -748,6 +893,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x6f: // JAL
+            type = HERVE_INSN_JUMP;
             {
                 uint32_t imm_j = ((insn >> 21) & 0x3ff) << 1 | ((insn >> 20) & 0x1) << 11 | ((insn >> 12) & 0xff) << 12 | ((insn >> 31) << 20);
                 imm_j = sign_extend(imm_j, 21);
@@ -756,6 +902,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x67: // JALR
+            type = HERVE_INSN_JUMP;
             {
                 uint32_t imm_i = sign_extend((insn >> 20), 12);
                 next_pc = (src1 + imm_i) & ~1u;
@@ -763,6 +910,7 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x37: // LUI
+            type = HERVE_INSN_ALU;
             {
                 uint32_t lui_val = insn & 0xfffff000u;
                 write_reg(rd, lui_val);
@@ -770,13 +918,16 @@ static bool execute_instruction(uint32_t insn) {
             }
             break;
         case 0x17: // AUIPC
+            type = HERVE_INSN_ALU;
             write_reg(rd, pc + (insn & 0xfffff000u));
             break;
         case 0x0F: // FENCE / FENCE.I
+            type = HERVE_INSN_ALU;
             // No-ops in single-threaded ISS with no memory ordering
             break;
         case 0x73: // SYSTEM (ECALL, EBREAK, CSR, MRET, WFI)
             if (funct3 == 0) {
+                type = HERVE_INSN_SYS;
                 // ECALL (0x00000073) or EBREAK (0x00100073)
                 if (insn == 0x00100073u || insn == 0x00000073u) {
                     return false;
@@ -800,6 +951,7 @@ static bool execute_instruction(uint32_t insn) {
                 return false;
             }
             // CSR instructions
+            type = HERVE_INSN_CSR;
             {
                 uint32_t csr_addr = (insn >> 20) & 0xFFFu;
                 uint32_t csr_val = 0;
@@ -871,7 +1023,9 @@ static bool execute_instruction(uint32_t insn) {
             break;
     }
 
+    uint32_t pc_before = pc;
     pc = next_pc;
+    if (herve_profiler_is_enabled()) herve_profiler_record_insn(type, pc_before, insn);
     return true;
 }
 
@@ -921,6 +1075,34 @@ struct elf32_phdr {
 #define EM_RISCV   0xF3
 #define PT_LOAD    1   /* Loadable program segment */
 
+/* Section header (32-bit) */
+struct elf32_shdr {
+    uint32_t sh_name;
+    uint32_t sh_type;
+    uint32_t sh_flags;
+    uint32_t sh_addr;
+    uint32_t sh_offset;
+    uint32_t sh_size;
+    uint32_t sh_link;
+    uint32_t sh_info;
+    uint32_t sh_addralign;
+    uint32_t sh_entsize;
+};
+
+/* Symbol table entry (32-bit) */
+struct elf32_sym {
+    uint32_t st_name;
+    uint32_t st_value;
+    uint32_t st_size;
+    unsigned char st_info;
+    unsigned char st_other;
+    uint16_t st_shndx;
+};
+
+#define SHT_SYMTAB 2
+#define SHT_STRTAB 3
+#define STT_FUNC   2
+
 uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
     if (elf_path == NULL || *elf_path == '\0') {
         return 0;
@@ -966,33 +1148,54 @@ uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
         return 0;
     }
 
-    /* Determine required RAM size from program headers */
+    /* Reset HTIF state */
+    htif_tohost_lo = 0;
+    htif_tohost_hi = 0;
+    htif_fromhost_lo = 0;
+    htif_fromhost_hi = 0;
+    htif_exit = false;
+    htif_exit_code = 0;
+    htif_halted = false;
+
+    /* Determine required RAM range from program headers */
+    uint32_t min_addr = 0xFFFFFFFFu;
     uint32_t max_addr = 0;
     for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
         struct elf32_phdr phdr;
         if (fseek(file, ehdr.e_phoff + i * ehdr.e_phentsize, SEEK_SET) != 0) {
-            fprintf(stderr, "rv_init_elf: seek to program header %u failed\n", (unsigned)i);
-            fclose(file);
-            return 0;
+            continue;
         }
         if (fread(&phdr, sizeof(phdr), 1, file) != 1) {
-            fprintf(stderr, "rv_init_elf: failed to read program header %u\n", (unsigned)i);
-            fclose(file);
-            return 0;
+            continue;
         }
         if (phdr.p_type == PT_LOAD) {
+            if (phdr.p_vaddr < min_addr) min_addr = phdr.p_vaddr;
             uint32_t end = phdr.p_vaddr + phdr.p_memsz;
-            if (end > max_addr) {
-                max_addr = end;
-            }
+            if (end > max_addr) max_addr = end;
         }
     }
 
-    /* Allocate RAM (at least ram_size, but large enough for all segments) */
-    size_t needed = (max_addr > (uint32_t)ram_size) ? (size_t)max_addr : ram_size;
-    if (needed < 1) {
-        needed = 1 << 20; /* default 1 MB */
+    if (max_addr <= min_addr) {
+        fprintf(stderr, "rv_init_elf: no loadable segments found in '%s'\n", elf_path);
+        fclose(file);
+        return 0;
     }
+
+    /* Allocate RAM: at minimum use ram_size, but also allocate enough for
+       the stack (riscv-tests benchmarks place stack at tp + 128KB).
+       Entry point >= 0x80000000 suggests a high-memory layout needing ~2MB. */
+    uint32_t needed = max_addr - min_addr;
+    if (ram_size > needed) needed = ram_size;
+    
+    /* Ensure enough room for high-memory programs (stack, heap, etc.) */
+    if (ram_size == 0 && min_addr >= 0x80000000u) {
+        needed = 2 * 1024 * 1024; /* 2MB default for high-memory programs */
+    } else if (needed < (1u << 20)) {
+        needed = 1u << 20; /* At least 1MB */
+    }
+    
+    /* Round up to page size (4KB) */
+    needed = (needed + 4095) & ~4095u;
 
     /* Free any existing memory */
     if (memory != NULL) {
@@ -1008,7 +1211,8 @@ uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
         return 0;
     }
 
-    memory_size = (uint32_t)needed;
+    memory_size = needed;
+    memory_base = min_addr;
     memset(memory, 0, memory_size);
     memset(regs, 0, sizeof(regs));
     pc = 0;
@@ -1031,29 +1235,65 @@ uint32_t rv_init_elf(const char *elf_path, size_t ram_size) {
 
         /* Check that segment fits in allocated RAM */
         uint32_t end = phdr.p_vaddr + phdr.p_memsz;
-        if (end > memory_size) {
-            fprintf(stderr, "rv_init_elf: segment %u (vaddr=0x%08x, memsz=%u) "
-                    "exceeds RAM size (0x%08x)\n",
-                    (unsigned)i, phdr.p_vaddr, phdr.p_memsz, memory_size);
+        if (phdr.p_vaddr < memory_base || end > memory_base + memory_size) {
+            fprintf(stderr, "rv_init_elf: segment %u exceeds RAM bounds\n", (unsigned)i);
             continue;
         }
 
         /* Read segment data from file */
         if (phdr.p_filesz > 0) {
             if (fseek(file, phdr.p_offset, SEEK_SET) != 0) {
-                fprintf(stderr, "rv_init_elf: seek to segment %u data failed\n", (unsigned)i);
                 continue;
             }
-            size_t read_size = fread(&memory[phdr.p_vaddr], 1, phdr.p_filesz, file);
-            (void)read_size;
+            fread(&memory[phdr.p_vaddr - memory_base], 1, phdr.p_filesz, file);
         }
 
         /* Zero-fill BSS (p_memsz > p_filesz) */
         if (phdr.p_memsz > phdr.p_filesz) {
-            memset(&memory[phdr.p_vaddr + phdr.p_filesz], 0,
+            memset(&memory[phdr.p_vaddr - memory_base + phdr.p_filesz], 0,
                    phdr.p_memsz - phdr.p_filesz);
         }
     }
+
+    /* Load symbol table for profiling */
+    struct elf32_shdr *shdrs = (struct elf32_shdr *)malloc(ehdr.e_shnum * sizeof(struct elf32_shdr));
+    fseek(file, ehdr.e_shoff, SEEK_SET);
+    fread(shdrs, sizeof(struct elf32_shdr), ehdr.e_shnum, file);
+
+    char *shstrtab = NULL;
+    if (ehdr.e_shstrndx != 0) {
+        shstrtab = (char *)malloc(shdrs[ehdr.e_shstrndx].sh_size);
+        fseek(file, shdrs[ehdr.e_shstrndx].sh_offset, SEEK_SET);
+        fread(shstrtab, 1, shdrs[ehdr.e_shstrndx].sh_size, file);
+    }
+
+    for (uint16_t i = 0; i < ehdr.e_shnum; i++) {
+        if (shdrs[i].sh_type == SHT_SYMTAB) {
+            struct elf32_shdr *symtab_sh = &shdrs[i];
+            struct elf32_shdr *strtab_sh = &shdrs[symtab_sh->sh_link];
+            
+            uint32_t num_syms = symtab_sh->sh_size / sizeof(struct elf32_sym);
+            struct elf32_sym *syms = (struct elf32_sym *)malloc(symtab_sh->sh_size);
+            char *strs = (char *)malloc(strtab_sh->sh_size);
+            
+            fseek(file, symtab_sh->sh_offset, SEEK_SET);
+            fread(syms, 1, symtab_sh->sh_size, file);
+            
+            fseek(file, strtab_sh->sh_offset, SEEK_SET);
+            fread(strs, 1, strtab_sh->sh_size, file);
+            
+            for (uint32_t j = 0; j < num_syms; j++) {
+                if ((syms[j].st_info & 0xf) == STT_FUNC && syms[j].st_size > 0) {
+                    add_symbol(syms[j].st_value, syms[j].st_size, &strs[syms[j].st_name]);
+                }
+            }
+            
+            free(syms);
+            free(strs);
+        }
+    }
+    free(shdrs);
+    if (shstrtab) free(shstrtab);
 
     fclose(file);
 
@@ -1156,6 +1396,7 @@ void rv_init(const char *firmware, size_t ram_size) {
     }
 
     memory_size = (uint32_t)ram_size;
+    memory_base = 0;
     memset(memory, 0, memory_size);
     memset(regs, 0, sizeof(regs));
     pc = 0;
@@ -1191,6 +1432,7 @@ void rv_init_from_buffer(const uint8_t *data, size_t size, size_t ram_size) {
     }
 
     memory_size = (uint32_t)ram_size;
+    memory_base = 0;
     memset(memory, 0, memory_size);
     memset(regs, 0, sizeof(regs));
     pc = 0;
@@ -1254,32 +1496,59 @@ int rv_step(int max_instructions) {
     }
 
     int executed = 0;
-    for (int i = 0; i < max_instructions; ++i) {
-        if (!valid_memory_access(pc, 4)) {
-            break;
-        }
+    if (herve_profiler_is_enabled()) {
+        for (int i = 0; i < max_instructions; ++i) {
+            if (htif_halted) break;
+            if (!valid_memory_access(pc, 4)) {
+                break;
+            }
 
-        uint32_t insn = read_u32(pc);
-        if ((insn & 0x3u) != 0x3u) {
-            /* 16-bit compressed instruction */
-            uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+            uint32_t insn = read_u32(pc);
             uint32_t pc_before = pc;
-            if (!execute_compressed(c_insn)) {
-                break;
+            if ((insn & 0x3u) != 0x3u) {
+                /* 16-bit compressed instruction */
+                uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+                if (!execute_compressed(c_insn)) {
+                    break;
+                }
+                if (pc == pc_before) {
+                    pc += 2;
+                }
+                herve_profiler_record_insn(HERVE_INSN_COMPRESSED, pc_before, c_insn);
+            } else {
+                if (!execute_instruction(insn)) {
+                    break;
+                }
+                /* execute_instruction already calls herve_profiler_record_insn and advances pc */
             }
-            /* Jump/branch compressed instructions already update pc.
-             * For non-jump instructions (which do not change pc), advance by 2 bytes. */
-            if (pc == pc_before) {
-                pc += 2;
-            }
-        } else {
-            if (!execute_instruction(insn)) {
-                break;
-            }
-            /* pc is advanced by +4 inside execute_instruction */
+            executed += 1;
+            csr_mcycle++;
         }
-        executed += 1;
-        csr_mcycle++;
+    } else {
+        for (int i = 0; i < max_instructions; ++i) {
+            if (htif_halted) break;            if (!valid_memory_access(pc, 4)) {
+                break;
+            }
+
+            uint32_t insn = read_u32(pc);
+            if ((insn & 0x3u) != 0x3u) {
+                /* 16-bit compressed instruction */
+                uint16_t c_insn = (uint16_t)(insn & 0xFFFFu);
+                uint32_t pc_before = pc;
+                if (!execute_compressed(c_insn)) {
+                    break;
+                }
+                if (pc == pc_before) {
+                    pc += 2;
+                }
+            } else {
+                if (!execute_instruction(insn)) {
+                    break;
+                }
+            }
+            executed += 1;
+            csr_mcycle++;
+        }
     }
 
     return executed;
@@ -1295,6 +1564,7 @@ void rv_set_ram(void *buf, size_t size) {
     }
     memory = (uint8_t *)buf;
     memory_size = (uint32_t)size;
+    memory_base = 0;
     wfi_sleep = false;
     initialized = true;
 }
@@ -1310,4 +1580,16 @@ uint32_t rv_get_pc(void) {
 uint32_t rv_get_reg(unsigned reg) {
     if (reg >= 32) return 0;
     return regs[reg];
+}
+
+uint64_t rv_get_cycles(void) {
+    return csr_mcycle;
+}
+
+bool rv_is_halted(void) {
+    return htif_halted;
+}
+
+int rv_get_exit_code(void) {
+    return htif_exit_code;
 }

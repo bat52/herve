@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -102,6 +103,26 @@ uint32_t rv_get_pc(void);
  * @return Current value of the register.
  */
 uint32_t rv_get_reg(unsigned reg);
+
+/**
+ * Get current cycle count (mcycle CSR).
+ */
+uint64_t rv_get_cycles(void);
+
+/**
+ * Check if the simulation has halted (e.g., via HTIF exit).
+ */
+bool rv_is_halted(void);
+
+/**
+ * Get the exit code from HTIF (valid when rv_is_halted() is true).
+ */
+int rv_get_exit_code(void);
+
+/**
+ * Get symbol name at a given address.
+ */
+const char* herve_get_symbol_at(uint32_t addr);
 
 #ifdef __cplusplus
 }

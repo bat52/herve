@@ -78,3 +78,6 @@ dpi-riscv/spike_benchmark_memcpy.csv
 dpi-riscv/test_softfloat
 dpi-riscv/debug_mul
 dpi-riscv/debug_mul.c
+
+# Whatsapp connector
+llm/pi-whatsapp-connector/*

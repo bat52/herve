@@ -11,6 +11,7 @@ The name "Herve" is a French person's name that happens to have similar pronunci
 - **Icarus Verilog VPI integration** — VPI system functions for Icarus-based simulations
 - **ModelSim DPI-C integration** — DPI-C shared library for ModelSim (Intel FPGA Edition) simulations
 - **Standalone mode** — Run RISC-V programs without any HDL simulator or RISC-V toolchain
+- **Advanced Profiling** — Built-in instruction and function-level profiling with cycle-accurate architecture models
 - **AHB-Lite GPIO testcase** — Full example of bus-level peripheral integration
 - **Interrupt support** — External interrupt handling via DPI-C
 - **Benchmarked** — 9,879× faster than Spike on riscv-tests ISA suite (51/51 tests passing)
@@ -27,6 +28,120 @@ make run_standalone
 ```
 
 This compiles and runs a built-in test program directly on the ISS without any RISC-V toolchain or HDL simulator.
+
+### Standalone ELF Runner & Profiler
+
+Herve includes a standalone CLI (`herve`) that can run RISC-V ELF files and generate detailed profiling reports:
+
+```bash
+cd dpi-riscv
+make herve
+./herve run firmware.elf --arch=ibex_small --profile --out=profile.csv
+```
+
+**Profiling Capabilities:**
+- **Architecture Models**: Select from pre-configured models like `serv`, `picorv32`, `ibex_small`, `vexriscv`, `cva6`, `boom`, or `xiangshan`.
+- **Function-level Stats**: Automatically tracks calls and cycles per function using ELF symbol table data.
+- **Instruction Breakdown**: Categorizes execution into ALU, Load, Store, Branch, Mul, Div, etc.
+- **Call-graph Tracking**: Records caller→callee edges with call counts.
+- **CSV Output**: Generates machine-readable reports for performance analysis.
+- **Zero Overhead**: Uses optimized execution paths when profiling is disabled to maintain high simulation speeds.
+
+#### End-to-end profiling example
+
+This walkthrough profiles the **Dhrystone** benchmark bundled in the repo,
+converts the CSV to JSON, and opens the visualizer.
+
+**1. Build the Dhrystone benchmark**
+
+```bash
+cd dpi-riscv
+make dhrystone.riscv
+```
+
+This produces ``dhrystone.riscv``, a statically-linked RISC-V ELF containing
+Dhrystone 2.1 with 30+ functions (``main``, ``Proc_1`` … ``Proc_8``,
+``Func_1`` … ``Func_3``, ``strcmp``, ``printf``, etc.).
+
+**2. Profile with Herve**
+
+```bash
+make herve
+./herve run dhrystone.riscv --arch=ibex_small --profile --out=profile.csv
+```
+
+Excerpt of ``profile.csv``::
+
+    META,arch,ibex_small
+    META,isa,rv32im
+    META,total_cycles,347310
+    META,total_instructions,198706
+    FUNC,Print_Stats,total_cycles,15229
+    FUNC,Print_Stats,calls,1
+    INSTR,Print_Stats,ALU,4753
+    ICOUNT,Print_Stats,ALU,4753
+    INSTR,Print_Stats,LOAD,5394
+    ICOUNT,Print_Stats,LOAD,2697
+    ...
+    FUNC,main,total_cycles,77087
+    FUNC,main,calls,1
+    FUNC,Proc_1,total_cycles,51500
+    FUNC,Proc_1,calls,500
+    FUNC,Func_2,total_cycles,17000
+    FUNC,Func_2,calls,500
+    FUNC,strcmp,total_cycles,101500
+    FUNC,strcmp,calls,500
+    ...
+    CALL,main,printf,2
+    CALL,printf,vprintfmt,2
+    CALL,vprintfmt,putchar,97
+    CALL,main,Proc_1,500
+    CALL,Proc_1,Proc_2,500
+    CALL,Proc_1,Proc_3,500
+    CALL,Proc_1,Proc_7,500
+    CALL,Proc_6,Func_3,500
+    ...
+
+The CSV contains 30+ functions with per-instruction-type cycle counts and
+caller→callee edges — a realistic multi-function profile ready for analysis.
+
+**3. Convert CSV to hierarchical JSON**
+
+```bash
+python3 scripts/profiler_csv_to_json.py profile.csv -o profile.json
+cat profile.json
+```
+
+See the [JSON output structure](llm/profiler.md#json-output-structure) in the
+design document for the full schema.
+
+**4. Visualize**
+
+Open the visualizer and load the JSON file:
+
+```bash
+xdg-open scripts/profiler_visualizer.html   # Linux
+open scripts/profiler_visualizer.html       # macOS
+```
+
+Click **Load JSON** and select ``profile.json``. The visualizer opens with a
+flamegraph by default. Use the plot dropdown to switch between **Icicle**
+(zoomable partition layout with breadcrumb navigation), **Sunburst**
+(hierarchical ring chart), **Flamegraph**, and **Treemap** (squarified
+layout). The call hierarchy tree is always visible in the left pane with a
+draggable resize divider. Use the **Root** dropdown to pick any function as
+the hierarchy root (defaults to ``main``) and the **Depth** slider to limit
+nesting.
+
+![Profiler visualizer showing a Dhrystone profile](scripts/profiler_screenshot.png)
+
+**Notes**
+
+- Any RISC-V ELF compiled with ``-march=rv32im`` (or ``rv32imc``) that
+  has debug symbols works — function names are resolved from the ELF symbol
+  table.
+- For long-running programs, pass ``--max-cycles=<N>`` to limit simulation
+  time, for example ``--max-cycles=500000``.
 
 ### Verilator DPI Test
 
@@ -293,11 +408,42 @@ bash agent.sh
 
 ### Other Scripts in `llm/`
 
-| Script | Purpose |
-|--------|---------|
+| Script / Directory | Purpose |
+|--------------------|---------|
 | `install_gemini_cli.sh` | Sets up a Node.js project with Google's Generative AI SDK |
 | `install_ollama_deepseek.sh` | Installs Ollama and pulls the DeepSeek Coder model |
 | `install_openclaw.sh` | Clones and installs the OpenClaw project in `~/openclaw` |
+| `install_pi_whatsapp_connector.sh` | Installs the WhatsApp connector for pi (see below) |
+| `pi-whatsapp-connector/` | WhatsApp ↔ pi-coding-agent bridge |
+
+### `llm/pi-whatsapp-connector/` — WhatsApp ↔ pi Bridge
+
+A [pi-coding-agent](https://pi.dev) connector that lets you chat with pi through **WhatsApp**.
+Send a message to your WhatsApp number and pi responds with AI-powered coding assistance.
+
+**How it works:**
+
+```
+WhatsApp ──► pi-whatsapp-connector ──► pi-coding-agent SDK ──► LLM
+               │                                               │
+               ◄────────────────── response ◄──────────────────┘
+```
+
+**Quick start:**
+
+```bash
+cd llm/pi-whatsapp-connector
+npm install
+node index.mjs
+# Scan the QR code with WhatsApp → Linked Devices → Link a Device
+```
+
+**Requirements:** Node.js >= 18, a WhatsApp account.
+
+Built with [baileys](https://github.com/WhiskeySockets/Baileys) (WhatsApp Web library) and the [pi SDK](https://pi.dev).
+Inspired by the [OpenClaw WhatsApp channel](https://github.com/openclaw/openclaw/tree/main/extensions/whatsapp).
+
+See [pi-whatsapp-connector/README.md](llm/pi-whatsapp-connector/README.md) for full documentation.
 
 ## License
 

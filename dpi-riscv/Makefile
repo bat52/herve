@@ -43,7 +43,7 @@ DUT_SV       = sim/dut/ahb_gpio.sv
 
 C = sim/iss/rv32_dpi.c
 
-.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb firmware_mmio_regs run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone
+.PHONY: all clean run run_fast run_debug run_mmio_regs run_muldiv run_irq run_ahb firmware firmware_muldiv firmware_irq firmware_ahb firmware_mmio_regs run_benchmark run_spike_benchmark compare_benchmark build_riscv_tests run_spike_benchmark_mm run_spike_benchmark_mm_csv compare_benchmark_mm run_spike_benchmark_memcpy run_spike_benchmark_memcpy_csv compare_benchmark_memcpy run_benchmark_dhrystone run_benchmark_dhrystone_csv run_spike_benchmark_dhrystone run_spike_benchmark_dhrystone_csv compare_benchmark_dhrystone herve
 
 all: run
 
@@ -84,16 +84,17 @@ $(FIRMWARE_IRQ_BIN): $(FIRMWARE_IRQ_ELF)
 firmware_irq: $(FIRMWARE_IRQ_BIN)
 
 # ---- Original test ----
-obj_dir/V$(TOP): $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN)
+obj_dir/V$(TOP): $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	# Compile ISS separately - do NOT pass it via Verilator's --exe --build
 	# as that would pull its DPI extern declarations into Vtb_top__ALL.cpp,
 	# causing duplicate symbol errors with the wrappers in rv32_dpi_tb.cpp.
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
 	# Use -LDFLAGS with absolute path (Verilator's sub-make runs inside obj_dir/)
 	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
 	  $(SV) $(CPP_ORIG)
 
 run: obj_dir/V$(TOP) $(FIRMWARE_BIN)
@@ -101,12 +102,13 @@ run: obj_dir/V$(TOP) $(FIRMWARE_BIN)
 
 # ---- Performance / debug variants ----
 # Build without trace for faster simulation
-obj_dir/V$(TOP)_fast: $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN)
+obj_dir/V$(TOP)_fast: $(SV) $(CPP_ORIG) $(C) $(FIRMWARE_BIN) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
 	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
 	  -o V$(TOP)_fast \
 	  $(SV) $(CPP_ORIG)
 
@@ -119,12 +121,13 @@ run_debug: obj_dir/V$(TOP) $(FIRMWARE_BIN)
 # ---- MMIO register config testcase ----
 SV_MMIO = sim/harness/tb_top_mmio_regs.sv
 
-obj_dir/V$(TOP)_mmio_regs: $(SV_MMIO) $(CPP_MMIO) $(C) $(FIRMWARE_BIN)
+obj_dir/V$(TOP)_mmio_regs: $(SV_MMIO) $(CPP_MMIO) $(C) $(FIRMWARE_BIN) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
 	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
 	  -o V$(TOP)_mmio_regs \
 	  $(SV_MMIO) $(CPP_MMIO)
 
@@ -134,12 +137,13 @@ run_mmio_regs: obj_dir/V$(TOP)_mmio_regs
 # ---- MUL/DIV extension testcase ----
 # Note: firmware is built programmatically in the C++ testbench,
 # so no firmware binary dependency is needed.
-obj_dir/V$(TOP)_muldiv: $(SV_MMIO) $(CPP_MULDIV) $(C)
+obj_dir/V$(TOP)_muldiv: $(SV_MMIO) $(CPP_MULDIV) $(C) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
 	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
 	  -o V$(TOP)_muldiv \
 	  $(SV_MMIO) $(CPP_MULDIV)
 
@@ -147,12 +151,13 @@ run_muldiv: obj_dir/V$(TOP)_muldiv
 	./obj_dir/V$(TOP)_muldiv
 
 # ---- IRQ testcase (Verilator) ----
-obj_dir/V$(TOP)_irq: $(SV) $(CPP_IRQ) $(C) $(FIRMWARE_IRQ_BIN)
+obj_dir/V$(TOP)_irq: $(SV) $(CPP_IRQ) $(C) $(FIRMWARE_IRQ_BIN) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
 	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_ -DVL_DPIDECL_rv_set_irq_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
 	  -o V$(TOP)_irq \
 	  $(SV) $(CPP_IRQ)
 
@@ -189,12 +194,13 @@ $(FIRMWARE_AHB_BIN): $(FIRMWARE_AHB_ELF)
 firmware_ahb: $(FIRMWARE_AHB_BIN)
 
 # ---- AHB-Lite GPIO testcase (Verilator) ----
-obj_dir/V$(TOP)_ahb: $(SV_AHB) $(BUS_SV) $(DUT_SV) $(CPP_AHB) $(C) $(FIRMWARE_AHB_BIN)
+obj_dir/V$(TOP)_ahb: $(SV_AHB) $(BUS_SV) $(DUT_SV) $(CPP_AHB) $(C) $(FIRMWARE_AHB_BIN) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
 	$(VERILATOR) --timing --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
 	  -o V$(TOP)_ahb \
 	  $(SV_AHB) $(BUS_SV) $(DUT_SV) $(CPP_AHB)
 
@@ -211,10 +217,10 @@ TB_ICARUS_SV = sim/icarus/tb_icarus_vpi.sv
 
 TB_ICARUS_VVP = obj_dir/tb_icarus.vvp
 
-$(VPI_VPI): $(VPI_SRC) $(C)
+$(VPI_VPI): $(VPI_SRC) $(C) sim/iss/herve_profiler.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -shared -fPIC -I$(CURDIR)/sim/iss -I/usr/include/iverilog \
-	  -o $@ $(VPI_SRC) $(C)
+	  -o $@ $(VPI_SRC) $(C) sim/iss/herve_profiler.c
 
 $(TB_ICARUS_VVP): $(TB_ICARUS_SV)
 	mkdir -p obj_dir
@@ -228,22 +234,22 @@ run_icarus: firmware $(VPI_VPI) $(TB_ICARUS_VVP)
 # ---- Standalone ISS test (no Verilator, no RISC-V toolchain) ----
 
 
-rv32_dpi_test: sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c
-	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c
+rv32_dpi_test: sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
+	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_test.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
 
 run_standalone: rv32_dpi_test
 	./rv32_dpi_test
 
 # ---- Standalone C-extension test (no Verilator, no RISC-V toolchain) ----
-rv32_dpi_c_test: sim/iss/rv32_dpi_c_test.cpp sim/iss/rv32_dpi.c
-	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_c_test.cpp sim/iss/rv32_dpi.c
+rv32_dpi_c_test: sim/iss/rv32_dpi_c_test.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
+	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_c_test.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
 
 run_c_test: rv32_dpi_c_test
 	./rv32_dpi_c_test
 
 # ---- Standalone IRQ test (no Verilator, no RISC-V toolchain) ----
-rv32_dpi_irq_test: sim/iss/rv32_dpi_irq_test.cpp sim/iss/rv32_dpi.c
-	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_irq_test.cpp sim/iss/rv32_dpi.c
+rv32_dpi_irq_test: sim/iss/rv32_dpi_irq_test.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
+	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_irq_test.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
 
 run_irq_standalone: rv32_dpi_irq_test
 	./rv32_dpi_irq_test
@@ -265,8 +271,8 @@ build_riscv_tests:
 	$(MAKE) -C $(RISCV_TESTS_ISA_DIR) XLEN=32 $(RV32UI_P_TESTS) $(RV32UM_P_TESTS) $(RV32UC_P_TESTS)
 
 # ---- riscv-tests validation (no Verilator, no RISC-V toolchain) ----
-rv32_dpi_riscv_tests: sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c
-	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c
+rv32_dpi_riscv_tests: sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
+	g++ -I./sim/iss -I. -o $@ sim/iss/rv32_dpi_riscv_tests.cpp sim/iss/rv32_dpi.c sim/iss/herve_profiler.c
 
 run_riscv_tests: build_riscv_tests rv32_dpi_riscv_tests
 	./rv32_dpi_riscv_tests
@@ -388,6 +394,12 @@ compare_benchmark_dhrystone: rv32_dpi_benchmark_htif dhrystone.riscv
 	./rv32_dpi_benchmark_htif --csv > herve_benchmark_dhrystone.csv
 	bash tests/run_spike_benchmark.sh --benchmark dhrystone.riscv --csv > spike_benchmark_dhrystone.csv
 	python3 tests/analyze_benchmark.py herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
+
+# ---- Herve CLI ----
+HERVE_SOURCES = sim/iss/herve_main.c sim/iss/rv32_dpi.c sim/iss/herve_profiler.c sim/iss/herve_arch.c sim/iss/herve_stubs.c
+
+herve: $(HERVE_SOURCES)
+	gcc -std=c11 -O2 -I./sim/iss -I. -o $@ $(HERVE_SOURCES)
 
 clean:
 	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o firmware_mmio_regs.elf firmware_mmio_regs.bin firmware_mmio_regs.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
