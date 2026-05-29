@@ -1,0 +1,3 @@
+[submodule "llm/pi-telegram-connector"]
+	path = llm/pi-telegram-connector
+	url = https://github.com/bat52/pi-telegram-connector.git
