@@ -457,7 +457,19 @@ herve: $(HERVE_SOURCES)
 	gcc -std=c11 -O2 -I./sim/iss -I. -o $@ $(HERVE_SOURCES)
 
 clean:
-	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o firmware_mmio_regs.elf firmware_mmio_regs.bin firmware_mmio_regs.o firmware_timer.elf firmware_timer.bin firmware_timer.o rv32_dpi_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark herve_benchmark.csv spike_benchmark.csv median.riscv median.riscv.dump herve_benchmark_htif.csv spike_benchmark_htif.csv rv32_dpi_benchmark_htif mm.riscv mm.riscv.dump herve_benchmark_mm.csv spike_benchmark_mm.csv memcpy.riscv memcpy.riscv.dump herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv softfloat.o sync_stubs.o alloca.o dhrystone.riscv dhrystone.riscv.dump herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
+	rm -rf obj_dir *.o *.d *.dvi *.vcd *.vcd~ *.fst
+	rm -f firmware.elf firmware.bin firmware.o firmware_muldiv.elf firmware_muldiv.bin firmware_muldiv.o \
+	  firmware_irq.elf firmware_irq.bin firmware_irq.o firmware_ahb.elf firmware_ahb.bin firmware_ahb.o \
+	  firmware_mmio_regs.elf firmware_mmio_regs.bin firmware_mmio_regs.o firmware_timer.elf \
+	  firmware_timer.bin firmware_timer.o
+	rm -f rv32_dpi_test rv32_dpi_c_test rv32_dpi_irq_test rv32_dpi_riscv_tests rv32_dpi_benchmark \
+	  rv32_dpi_benchmark_htif herve
+	rm -f median.riscv median.riscv.dump mm.riscv mm.riscv.dump memcpy.riscv memcpy.riscv.dump \
+	  dhrystone.riscv dhrystone.riscv.dump
+	rm -f softfloat.o sync_stubs.o alloca.o
+	rm -f herve_benchmark.csv spike_benchmark.csv herve_benchmark_htif.csv spike_benchmark_htif.csv \
+	  herve_benchmark_mm.csv spike_benchmark_mm.csv herve_benchmark_memcpy.csv spike_benchmark_memcpy.csv \
+	  herve_benchmark_dhrystone.csv spike_benchmark_dhrystone.csv
 
 
 
