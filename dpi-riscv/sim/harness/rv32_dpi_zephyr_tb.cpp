@@ -53,7 +53,8 @@ extern "C" int dpi_mmio_read(int addr) {
     }
 }
 
-extern "C" void dpi_mmio_write(int addr, int data) {
+extern "C" void dpi_mmio_write(int addr, int data) { fprintf(stderr, "DPI_WRITE: addr=0x%x data=0x%x
+", addr, data);
     switch (addr) {
         case 0x10000000: tb->mem_write = data; break;              // GPIO_OUT
         case 0x10000018: tb->mtimecmp_lo = data; break;            // MTIMECMP_LO
