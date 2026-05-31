@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "herve_profiler.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -127,5 +128,11 @@ const char* herve_get_symbol_at(uint32_t addr);
 #ifdef __cplusplus
 }
 #endif
+
+void rv_profiler_set_arch(const herve_arch_t *arch);
+void rv_profiler_enable(bool enable);
+bool rv_profiler_is_enabled(void);
+void rv_profiler_record_insn(herve_insn_type_t type, uint32_t pc, uint32_t insn);
+void rv_profiler_report_csv(const char *filename);
 
 #endif // RV32_DPI_H

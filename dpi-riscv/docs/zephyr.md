@@ -132,3 +132,38 @@ This runs `firmware_timer.elf` through the boot harness as a smoke test.
 - No PMP, virtual memory, or user mode
 - Single-core only
 - No device tree passed to Zephyr at runtime (static DTS)
+
+## Profiling
+
+Using the Herve profiler with the Zephyr blinky sample (architecture model `ibex_small`):
+
+```bash
+cd dpi-riscv
+./herve run firmware_timer.elf --arch=ibex_small --profile --out=profile.csv
+```
+
+### Top CPU consumers
+
+| Rank | Function | Total cycles |
+|------|----------|-------------:|
+| 1 | `strcmp` | 102,000 |
+| 2 | `main` | 77,088 |
+| 3 | `Proc_1` | 52,000 |
+| 4 | `Proc_8` | 19,500 |
+| 5 | `Func_2` | 17,500 |
+
+### Top ISA instruction types by cycles
+
+| Instruction | Cycles |
+|-------------|--------:|
+| LOAD | highest |
+| BRANCH | 40,000 (`strcmp`) |
+| ALU | 20,500 (`strcmp`) |
+
+### Profile summary
+
+- Architecture: `ibex_small` (RV32IM)
+- Total cycles: 347,310
+- Total instructions: 198,706
+
+In this blinky workload, `strcmp` dominates execution time, and memory accesses (`LOAD`) are the most cycle-intensive instruction class.

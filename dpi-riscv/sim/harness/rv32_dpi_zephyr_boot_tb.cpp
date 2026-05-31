@@ -29,6 +29,7 @@
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 #include "rv32_dpi.h"
+#include "herve_profiler.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -96,6 +97,8 @@ int main(int argc, char **argv) {
     int max_ticks = 500000;
     const char *stop_string = NULL;
     bool trace = false;
+    bool profile = false;
+    const char *profile_out = "profile.csv";
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -104,12 +107,18 @@ int main(int argc, char **argv) {
             stop_string = argv[++i];
         } else if (strcmp(argv[i], "--trace") == 0) {
             trace = true;
+        } else if (strcmp(argv[i], "--profile") == 0) {
+            profile = true;
+        } else if (strncmp(argv[i], "--profile-out=", 14) == 0) {
+            profile_out = argv[i] + 14;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             printf("Usage: %s <zephyr.elf> [options]\n", argv[0]);
             printf("Options:\n");
             printf("  -c <count>      Max clock ticks (default: 500000)\n");
             printf("  -s <string>     Stop when this string appears in output\n");
             printf("  --trace         Enable VCD trace\n");
+            printf("  --profile       Enable profiling\n");
+            printf("  --profile-out=<file>  Profile output file (default: profile.csv)\n");
             return 0;
         } else if (argv[i][0] != '-') {
             elf_path = argv[i];
@@ -127,6 +136,10 @@ int main(int argc, char **argv) {
     printf("Max ticks:  %d\n", max_ticks);
     printf("Stop str:   %s\n", stop_string ? stop_string : "(none)");
     printf("Trace:      %s\n", trace ? "yes" : "no");
+    printf("Profile:    %s\n", profile ? "yes" : "no");
+    if (profile) {
+        printf("Profile out: %s\n", profile_out);
+    }
     printf("\n");
 
     // Create the Verilator model
@@ -158,6 +171,18 @@ int main(int argc, char **argv) {
     uint32_t *ram = (uint32_t *)rv_get_ram();
     printf("RAM[0..7]: 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x\n\n",
            ram[0], ram[1], ram[2], ram[3], ram[4], ram[5], ram[6], ram[7]);
+
+    // Initialize profiler if enabled
+    if (profile) {
+        static const herve_arch_t arch_ibex_small = {
+            "ibex_small",
+            2,
+            { 1, 1, 3, 33, 2, 2, 2, 2, 1, 1, 1 }
+        };
+        herve_profiler_set_arch(&arch_ibex_small);
+        herve_profiler_enable(true);
+        printf("Profiler enabled (architecture: ibex_small)\n\n");
+    }
 
     // Initialize all signals
     tb->clk = 0;
@@ -238,6 +263,13 @@ int main(int argc, char **argv) {
     } else {
         printf("[WARN] Very few instructions executed — check ELF compatibility\n");
         pass = false;
+    }
+
+    // Write profiling report if enabled
+    if (profile) {
+        printf("\n=== Profiling Report ===\n");
+        herve_profiler_report_csv(profile_out);
+        printf("Profile written to: %s\n", profile_out);
     }
 
     printf("\n===========================\n");

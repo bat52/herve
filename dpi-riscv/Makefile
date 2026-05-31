@@ -201,13 +201,14 @@ run_timer: firmware_timer obj_dir/V$(TOP)_zephyr
 # ---- Zephyr Boot Harness (Verilator) ----
 CPP_ZEPHYR_BOOT = sim/harness/rv32_dpi_zephyr_boot_tb.cpp
 
-obj_dir/V$(TOP)_zephyr_boot: $(SV_ZEPHYR) $(CPP_ZEPHYR_BOOT) $(C) sim/iss/herve_profiler.c
+obj_dir/V$(TOP)_zephyr_boot: $(SV_ZEPHYR) $(CPP_ZEPHYR_BOOT) $(C) sim/iss/herve_profiler.c sim/iss/herve_arch.c
 	mkdir -p obj_dir
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c $(C) -o obj_dir/rv32_dpi.o
 	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_profiler.c -o obj_dir/herve_profiler.o
+	$(CC) $(CFLAGS) -I$(CURDIR)/sim/iss -I$(CURDIR) -c sim/iss/herve_arch.c -o obj_dir/herve_arch.o
 	$(VERILATOR) --cc --exe --build -j $(shell nproc 2>/dev/null || echo 4) --trace \
 	  -CFLAGS "-I$(CURDIR)/sim/iss -I$(CURDIR) -DVL_DPIDECL_dpi_mmio_read_ -DVL_DPIDECL_dpi_mmio_write_ -DVL_DPIDECL_rv_set_irq_" \
-	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o" \
+	  -LDFLAGS "$(shell pwd)/obj_dir/rv32_dpi.o $(shell pwd)/obj_dir/herve_profiler.o $(shell pwd)/obj_dir/herve_arch.o" \
 	  -o V$(TOP)_zephyr_boot \
 	  $(SV_ZEPHYR) $(CPP_ZEPHYR_BOOT)
 
